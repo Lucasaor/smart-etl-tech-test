@@ -1,5 +1,6 @@
-"""Tests for Phase 1 — Foundation (config, core, agents/llm_provider)."""
+"""Tests for Phase 1 — Foundation (config, core, agents/llm_provider, specs)."""
 
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -251,3 +252,214 @@ class TestMonitoringStore:
         alerts = store.get_alerts()
         assert len(alerts) == 1
         assert alerts[0].severity == AlertSeverity.WARNING
+
+
+class TestSettings_SpecPath:
+    """Tests for spec_path in config/settings.py."""
+
+    def test_spec_path_default_local(self):
+        from config.settings import Settings
+
+        s = Settings(data_root="/tmp/test_data")
+        assert s.spec_path == "/tmp/test_data/specs"
+
+    def test_spec_path_custom(self):
+        from config.settings import Settings
+
+        s = Settings(data_root="/tmp/test_data", spec_dir="/custom/specs")
+        assert s.spec_path == "/custom/specs"
+
+    def test_spec_path_databricks(self):
+        from config.settings import Settings
+
+        s = Settings(runtime_env="databricks")
+        assert s.spec_path == "/mnt/delta/specs"
+
+
+class TestProjectSpec:
+    """Tests for pipeline/specs.py — ProjectSpec model."""
+
+    def test_spec_valida_com_tudo(self, tmp_path):
+        from pipeline.specs import ProjectSpec
+
+        # Criar arquivo de dados simulado
+        dados_path = str(tmp_path / "dados.parquet")
+        pl.DataFrame({"a": [1, 2], "b": ["x", "y"]}).write_parquet(dados_path)
+
+        spec = ProjectSpec(
+            nome="teste",
+            dados_brutos_path=dados_path,
+            dicionario_dados="## Coluna a\nTipo: int",
+            descricao_kpis="## KPI 1\nContagem total",
+        )
+        assert spec.is_valida
+        assert spec.validar() == []
+
+    def test_spec_invalida_sem_dados(self):
+        from pipeline.specs import ProjectSpec
+
+        spec = ProjectSpec(
+            nome="teste",
+            dados_brutos_path="",
+            dicionario_dados="dicionário",
+            descricao_kpis="kpis",
+        )
+        problemas = spec.validar()
+        assert len(problemas) >= 1
+        assert any("dados brutos" in p.lower() for p in problemas)
+
+    def test_spec_invalida_sem_dicionario(self, tmp_path):
+        from pipeline.specs import ProjectSpec
+
+        dados_path = str(tmp_path / "d.parquet")
+        pl.DataFrame({"x": [1]}).write_parquet(dados_path)
+
+        spec = ProjectSpec(
+            dados_brutos_path=dados_path,
+            dicionario_dados="",
+            descricao_kpis="kpis",
+        )
+        problemas = spec.validar()
+        assert any("dicionário" in p.lower() for p in problemas)
+
+    def test_spec_invalida_sem_kpis(self, tmp_path):
+        from pipeline.specs import ProjectSpec
+
+        dados_path = str(tmp_path / "d.parquet")
+        pl.DataFrame({"x": [1]}).write_parquet(dados_path)
+
+        spec = ProjectSpec(
+            dados_brutos_path=dados_path,
+            dicionario_dados="dict",
+            descricao_kpis="",
+        )
+        problemas = spec.validar()
+        assert any("kpi" in p.lower() for p in problemas)
+
+    def test_spec_invalida_arquivo_inexistente(self):
+        from pipeline.specs import ProjectSpec
+
+        spec = ProjectSpec(
+            dados_brutos_path="/nao/existe.parquet",
+            dicionario_dados="dict",
+            descricao_kpis="kpis",
+        )
+        problemas = spec.validar()
+        assert any("não encontrado" in p.lower() for p in problemas)
+
+
+class TestAnalisarAmostra:
+    """Tests for pipeline/specs.py — analisar_amostra."""
+
+    def test_analisar_parquet(self, tmp_path):
+        from pipeline.specs import analisar_amostra
+
+        dados_path = str(tmp_path / "dados.parquet")
+        df = pl.DataFrame({
+            "id": [1, 2, 3, 4, 5],
+            "nome": ["Ana", "Bob", None, "Carlos", "Diana"],
+            "valor": [10.0, 20.0, 30.0, 40.0, 50.0],
+        })
+        df.write_parquet(dados_path)
+
+        analise = analisar_amostra(dados_path)
+        assert analise.num_linhas == 5
+        assert analise.num_colunas == 3
+        assert len(analise.colunas) == 3
+
+        # Verificar detalhes de coluna
+        col_nome = next(c for c in analise.colunas if c.nome == "nome")
+        assert col_nome.nulos == 1
+        assert col_nome.nulos_pct == 20.0
+
+    def test_analisar_csv(self, tmp_path):
+        from pipeline.specs import analisar_amostra
+
+        dados_path = str(tmp_path / "dados.csv")
+        pl.DataFrame({"x": [1, 2], "y": ["a", "b"]}).write_csv(dados_path)
+
+        analise = analisar_amostra(dados_path)
+        assert analise.num_linhas == 2
+        assert analise.num_colunas == 2
+
+    def test_analisar_arquivo_inexistente(self):
+        from pipeline.specs import analisar_amostra
+
+        with pytest.raises(FileNotFoundError):
+            analisar_amostra("/nao/existe.parquet")
+
+    def test_resumo_nao_vazio(self, tmp_path):
+        from pipeline.specs import analisar_amostra
+
+        dados_path = str(tmp_path / "dados.parquet")
+        pl.DataFrame({"a": [1]}).write_parquet(dados_path)
+
+        analise = analisar_amostra(dados_path)
+        resumo = analise.resumo()
+        assert "Linhas:" in resumo
+        assert "Colunas:" in resumo
+
+
+class TestSalvarCarregarSpec:
+    """Tests for pipeline/specs.py — salvar_spec e carregar_spec."""
+
+    def test_salvar_e_carregar_spec(self, tmp_path):
+        from pipeline.specs import (
+            AnaliseAmostra,
+            ColunaInfo,
+            ProjectSpec,
+            carregar_spec,
+            salvar_spec,
+        )
+
+        spec_dir = str(tmp_path / "specs")
+        spec = ProjectSpec(
+            nome="meu_projeto",
+            dados_brutos_path="/dados/amostra.parquet",
+            dicionario_dados="## Coluna A\nDescrição da coluna A",
+            descricao_kpis="## KPI 1\nTotal de vendas",
+            analise=AnaliseAmostra(
+                num_linhas=100,
+                num_colunas=3,
+                colunas=[
+                    ColunaInfo(nome="id", tipo="Int64", valores_unicos=100),
+                    ColunaInfo(nome="nome", tipo="Utf8", nulos=5, nulos_pct=5.0),
+                ],
+            ),
+        )
+
+        salvar_spec(spec, spec_dir)
+
+        # Verificar arquivos criados
+        assert (Path(spec_dir) / "spec_meta.json").exists()
+        assert (Path(spec_dir) / "dicionario_dados.md").exists()
+        assert (Path(spec_dir) / "descricao_kpis.md").exists()
+
+        # Carregar e comparar
+        loaded = carregar_spec(spec_dir)
+        assert loaded.nome == "meu_projeto"
+        assert loaded.dicionario_dados == "## Coluna A\nDescrição da coluna A"
+        assert loaded.descricao_kpis == "## KPI 1\nTotal de vendas"
+        assert loaded.analise is not None
+        assert loaded.analise.num_linhas == 100
+        assert len(loaded.analise.colunas) == 2
+
+    def test_carregar_spec_diretorio_inexistente(self):
+        from pipeline.specs import carregar_spec
+
+        with pytest.raises(FileNotFoundError):
+            carregar_spec("/nao/existe")
+
+    def test_spec_existe(self, tmp_path):
+        from pipeline.specs import ProjectSpec, salvar_spec, spec_existe
+
+        spec_dir = str(tmp_path / "specs")
+        assert spec_existe(spec_dir) is False
+
+        spec = ProjectSpec(
+            dados_brutos_path="/x",
+            dicionario_dados="d",
+            descricao_kpis="k",
+        )
+        salvar_spec(spec, spec_dir)
+        assert spec_existe(spec_dir) is True

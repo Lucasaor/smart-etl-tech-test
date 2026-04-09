@@ -1,8 +1,11 @@
-"""Pipeline orchestrator — sequences step execution with status tracking.
+"""Orquestrador do pipeline — sequencia execução dos steps com rastreio de status.
 
-Runs pipeline steps (Bronze → Silver → Gold) in order, emits events,
-tracks status via the monitoring store, and provides a unified entry
-point for both manual execution and agent-triggered runs.
+Executa os steps do pipeline (Bronze → Silver → Gold) em ordem, emite eventos,
+rastreia status via monitoring store, e fornece um ponto de entrada unificado
+tanto para execução manual quanto para execução disparada por agentes.
+
+Aceita opcionalmente uma ProjectSpec para configurar paths e parâmetros
+dinamicamente a partir das especificações do projeto.
 """
 
 from __future__ import annotations
@@ -24,37 +27,56 @@ from core.events import (
 )
 from monitoring.models import PipelineRun, RunStatus, StepRun
 from monitoring.store import get_monitoring_store
+from pipeline.specs import ProjectSpec, carregar_spec, spec_existe
 
 logger = structlog.get_logger(__name__)
 
 
 class PipelineOrchestrator:
-    """Orchestrates the execution of pipeline steps."""
+    """Orquestra a execução dos steps do pipeline."""
 
     def __init__(
         self,
         event_bus: EventBus | None = None,
+        spec: ProjectSpec | None = None,
     ) -> None:
         self.settings = get_settings()
         self.bus = event_bus or get_event_bus()
         self.store = get_monitoring_store()
+        self.spec = spec
+
+    def carregar_spec_se_disponivel(self) -> ProjectSpec | None:
+        """Carrega a spec do projeto se existir no diretório configurado."""
+        if self.spec:
+            return self.spec
+        spec_dir = self.settings.spec_path
+        if spec_existe(spec_dir):
+            self.spec = carregar_spec(spec_dir)
+            logger.info("spec_carregada_pelo_orchestrator", nome=self.spec.nome)
+        return self.spec
 
     def run_pipeline(
         self,
         layers: list[str] | None = None,
         trigger: str = "manual",
     ) -> PipelineRun:
-        """Execute the pipeline for the specified layers.
+        """Executa o pipeline para as camadas especificadas.
+
+        Se uma ProjectSpec estiver disponível (via construtor ou diretório),
+        ela é usada para configurar o source_path da camada Bronze.
 
         Args:
-            layers: List of layers to run. Defaults to ["bronze", "silver", "gold"].
-            trigger: What triggered this run ("manual", "monitor_agent", "schedule").
+            layers: Lista de camadas a executar. Padrão: ["bronze", "silver", "gold"].
+            trigger: O que disparou esta execução ("manual", "monitor_agent", "schedule").
 
         Returns:
-            PipelineRun with status and step details.
+            PipelineRun com status e detalhes dos steps.
         """
         if layers is None:
             layers = ["bronze", "silver", "gold"]
+
+        # Tenta carregar a spec do projeto
+        self.carregar_spec_se_disponivel()
 
         run = PipelineRun(layers=layers, trigger=trigger, status=RunStatus.RUNNING)
         emit_pipeline_started(self.bus, run.run_id, layers)
@@ -126,22 +148,51 @@ class PipelineOrchestrator:
         return run
 
     def run_single_step(self, layer: str, trigger: str = "manual") -> PipelineRun:
-        """Run a single pipeline layer."""
+        """Executa uma única camada do pipeline."""
         return self.run_pipeline(layers=[layer], trigger=trigger)
 
     def _get_step_registry(self) -> dict[str, callable]:
-        """Registry mapping layer names to their execution functions."""
+        """Registro mapeando nomes de camadas às funções de execução."""
         return {
             "bronze": self._run_bronze,
-            # "silver" and "gold" will be added in Phases 3 and 4
+            "silver": self._run_silver,
+            # "gold" será adicionado na Fase 4 (gerado pelo CodeGen Agent)
         }
 
     def _run_bronze(self) -> dict:
-        """Execute the Bronze ingestion step."""
+        """Executa o step de ingestão Bronze.
+
+        Usa o path da spec se disponível, senão usa o path das settings.
+        """
         from pipeline.bronze.ingestion import ingest_bronze
 
+        source_path = self.settings.bronze_source_path
+        if self.spec and self.spec.dados_brutos_path:
+            source_path = self.spec.dados_brutos_path
+
         return ingest_bronze(
-            source_path=self.settings.bronze_source_path,
+            source_path=source_path,
             bronze_path=self.settings.bronze_path,
             mode="auto",
         )
+
+    def _run_silver(self) -> dict:
+        """Executa os steps Silver: limpeza, extração e agregação."""
+        from pipeline.silver.cleaning import clean_silver
+        from pipeline.silver.conversations import aggregate_conversations
+        from pipeline.silver.extraction import extract_entities
+
+        silver_stats = clean_silver(
+            bronze_path=self.settings.bronze_path,
+            silver_messages_path=self.settings.silver_messages_path,
+        )
+        extract_entities(silver_messages_path=self.settings.silver_messages_path)
+        agg_stats = aggregate_conversations(
+            silver_messages_path=self.settings.silver_messages_path,
+            silver_conversations_path=self.settings.silver_conversations_path,
+        )
+        return {
+            **silver_stats,
+            "conversations_written": agg_stats["total_conversations"],
+            "rows_written": silver_stats["rows_written"],
+        }

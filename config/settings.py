@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     # --- Data Paths ---
     data_root: str = "./data"
     bronze_source_path: str = "./conversations_bronze.parquet"
+    spec_dir: str = ""  # Diretório das especificações do projeto; padrão: {data_root}/specs
 
     # --- LLM ---
     llm_model: str = "gpt-4o-mini"
@@ -58,6 +59,15 @@ class Settings(BaseSettings):
     # --- Derived Paths ---
     @computed_field  # type: ignore[prop-decorator]
     @property
+    def spec_path(self) -> str:
+        if self.spec_dir:
+            return self.spec_dir
+        if self.runtime_env == RuntimeEnv.DATABRICKS:
+            return "/mnt/delta/specs"
+        return str(Path(self.data_root) / "specs")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
     def bronze_path(self) -> str:
         if self.runtime_env == RuntimeEnv.DATABRICKS:
             return f"/mnt/delta/bronze"
@@ -69,6 +79,20 @@ class Settings(BaseSettings):
         if self.runtime_env == RuntimeEnv.DATABRICKS:
             return f"/mnt/delta/silver"
         return str(Path(self.data_root) / "silver")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def silver_messages_path(self) -> str:
+        if self.runtime_env == RuntimeEnv.DATABRICKS:
+            return "/mnt/delta/silver/messages"
+        return str(Path(self.data_root) / "silver" / "messages")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def silver_conversations_path(self) -> str:
+        if self.runtime_env == RuntimeEnv.DATABRICKS:
+            return "/mnt/delta/silver/conversations"
+        return str(Path(self.data_root) / "silver" / "conversations")
 
     @computed_field  # type: ignore[prop-decorator]
     @property

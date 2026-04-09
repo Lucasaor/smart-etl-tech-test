@@ -1,22 +1,52 @@
 # Agentic Pipeline
 
-Pipeline de Transformação Agêntica de Dados — Arquitetura Medalhão (Bronze → Silver → Gold) gerenciado por agentes de IA autônomos.
+Pipeline de Transformação Agêntica de Dados — Arquitetura Medalhão (Bronze → Silver → Gold) **gerado e gerenciado por agentes de IA autônomos**.
 
 ## Visão Geral
 
-Sistema que constrói e gerencia autonomamente um pipeline de dados em 3 camadas (Bronze → Silver → Gold) para dados transacionais de conversas de vendas via WhatsApp (~15k conversas, ~150k mensagens). Agentes de IA monitoram, executam e auto-corrigem o pipeline como infraestrutura persistente.
+O sistema **recebe como entrada** uma amostra de dados brutos, um dicionário de dados e uma descrição dos KPIs desejados. A partir dessas entradas, agentes de IA autônomos **implementam os scripts do pipeline**, gerenciam a execução e auto-corrigem falhas — tudo como infraestrutura persistente.
+
+### Fluxo Principal
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│              Entrada (via Streamlit ou config)                       │
+│  1. Amostra de dados brutos (parquet/csv)                           │
+│  2. Dicionário de dados (markdown)                                  │
+│  3. Descrição dos KPIs desejados (markdown)                         │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                  Agente Gerador de Código (CodeGen)                  │
+│  Analisa dados + dicionário + KPIs → Gera scripts Bronze/Silver/Gold│
+│                       LiteLLM (LLM Router)                          │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                   Pipeline Layer (Python gerado)                     │
+│       Bronze (Ingestão) → Silver (Limpeza) → Gold (Analytics)       │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│              Storage Layer (Delta Lake)                               │
+│         Local: deltalake+polars  │  Databricks: Delta nativo         │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
 ### Arquitetura
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
 │                     Frontend (Streamlit)                       │
-│  Pipeline Monitor  │  Agent Monitor  │  Gold Dashboard         │
+│  Configuração  │  Pipeline Monitor  │  Agent Monitor  │  Gold │
 └───────────────────────────────────────────────────────────────┘
                               │
 ┌───────────────────────────────────────────────────────────────┐
 │                   Agent Layer (LangGraph)                      │
-│  Pipeline Agent  │  Monitor Agent  │  Repair Agent             │
+│  CodeGen Agent  │  Pipeline Agent  │  Monitor  │  Repair      │
 │                     LiteLLM (LLM Router)                      │
 │              OpenAI │ Anthropic │ Google │ Ollama │ ...        │
 └───────────────────────────────────────────────────────────────┘
@@ -40,7 +70,7 @@ Sistema que constrói e gerencia autonomamente um pipeline de dados em 3 camadas
 | Agent Framework | **LangGraph** | State machine robusto com suporte a auto-correção e fallback |
 | Storage | **Delta Lake** | Formato portável local↔Databricks; ACID, time travel, schema enforcement |
 | Compute (local) | **Polars + DuckDB** | Rápido para ~150k rows; adapter pattern para PySpark no Databricks |
-| Frontend | **Streamlit** | Python nativo, funciona local e como Databricks App |
+| Frontend | **Streamlit** | Python nativo, interface de entrada de dados, funciona local e como Databricks App |
 | Monitoring | **SQLite** (local) / **Delta tables** (Databricks) | Logs de pipeline runs e ações dos agentes |
 
 ## Estrutura do Projeto
@@ -49,10 +79,9 @@ Sistema que constrói e gerencia autonomamente um pipeline de dados em 3 camadas
 .
 ├── pyproject.toml                 # Definição do projeto e dependências
 ├── .env.example                   # Template de variáveis de ambiente
-├── conversations_bronze.parquet   # Dados fonte (~15k conversas)
 │
 ├── config/                        # Configuração
-│   ├── settings.py                # Pydantic Settings (runtime, paths, LLM)
+│   ├── settings.py                # Pydantic Settings (runtime, paths, LLM, specs)
 │   └── llm_config.py              # Cadeia de fallback de modelos + cost tracking
 │
 ├── core/                          # Infraestrutura
@@ -60,26 +89,60 @@ Sistema que constrói e gerencia autonomamente um pipeline de dados em 3 camadas
 │   ├── compute.py                 # ComputeBackend ABC → Polars / Spark
 │   └── events.py                  # EventBus pub/sub para pipeline events
 │
+├── pipeline/                      # Transformações de dados
+│   ├── specs.py                   # ProjectSpec: dados brutos + dicionário + KPIs
+│   ├── orchestrator.py            # Orquestrador spec-aware
+│   ├── bronze/                    # Ingestão de dados brutos → Delta
+│   │   ├── ingestion.py           # Validação, parse metadata, incremental
+│   │   └── simulator.py           # Simula chegada incremental de dados
+│   ├── silver/                    # Limpeza, extração e agregação
+│   │   ├── cleaning.py            # Dedup status, normalização, flags
+│   │   ├── extraction.py          # Regex: PII, veículos, concorrentes
+│   │   └── conversations.py       # Agregação por conversa
+│   └── gold/                      # (Fase 4) Analytics — gerado pelo CodeGen Agent
+│
 ├── agents/                        # Agentes de IA
 │   ├── llm_provider.py            # LiteLLM wrapper (retry, fallback, budget)
-│   └── tools/                     # (Fase 5) Ferramentas dos agentes
-│
-├── pipeline/                      # Transformações de dados
-│   ├── bronze/                    # (Fase 2) Ingestão
-│   ├── silver/                    # (Fase 3) Limpeza e extração
-│   └── gold/                      # (Fase 4) Analytics e insights
+│   ├── codegen_agent.py           # Agente gerador: spec → pipeline code
+│   └── tools/
+│       └── spec_tools.py          # Ferramentas de análise de especificações
 │
 ├── monitoring/                    # Monitoramento
 │   ├── models.py                  # Modelos: PipelineRun, StepRun, AgentAction, Alert
 │   └── store.py                   # Persistência SQLite com queries
 │
-├── tests/                         # Testes
-│   └── test_phase1.py             # 19 testes da Fase 1 (foundation)
+├── frontend/                      # Dashboard Streamlit
+│   ├── app.py                     # Entry point principal
+│   └── pages/
+│       └── 0_configuracao.py      # Upload: dados brutos, dicionário, KPIs
 │
-├── frontend/                      # (Fase 6) Streamlit dashboards
+├── tests/                         # Testes (83 testes passando)
+│   ├── test_phase1.py             # Fundação + specs (34 testes)
+│   ├── test_phase2.py             # Bronze + orchestrator (16 testes)
+│   └── test_phase3.py             # Silver + spec tools (33 testes)
+│
+├── data/
+│   ├── specs/                     # Especificações do projeto (input do usuário)
+│   ├── bronze/                    # Tabela Delta Bronze
+│   ├── silver/                    # Tabelas Delta Silver
+│   ├── gold/                      # Tabelas Delta Gold
+│   └── monitoring/                # SQLite de monitoramento
+│
 ├── docker/                        # (Fase 7) Docker Compose
 └── databricks/                    # (Fase 8) Notebooks Databricks
 ```
+
+## Entradas do Sistema
+
+O pipeline é orientado por **três entradas obrigatórias**, enviadas via Streamlit ou configuração:
+
+| Entrada | Formato | Propósito |
+|---------|---------|-----------|
+| **Amostra de dados brutos** | Parquet ou CSV | Dados que serão processados na camada Bronze |
+| **Dicionário de dados** | Markdown | Descreve colunas, tipos, valores esperados e particularidades |
+| **Descrição dos KPIs** | Markdown | Define os indicadores e análises desejados na camada Gold |
+
+Os agentes analisam essas entradas e implementam automaticamente os scripts do pipeline, documentados em português brasileiro.
 
 ## Instalação
 
@@ -114,6 +177,14 @@ cp .env.example .env
 pytest tests/ -v
 ```
 
+### Interface Streamlit
+
+```bash
+streamlit run frontend/app.py
+```
+
+Acesse `http://localhost:8501` e navegue para a página **Configuração** para enviar seus dados, dicionário e KPIs.
+
 ## Configuração LLM
 
 O sistema é **agnóstico a plataforma de LLM**. Configure via `.env`:
@@ -139,22 +210,22 @@ A cadeia de fallback é automática: se o modelo primário falha, o sistema tent
 
 | Fase | Descrição | Status |
 |------|-----------|--------|
-| **1** | Fundação (config, storage, compute, events, LLM provider) | ✅ Completa |
-| **2** | Camada Bronze (ingestão, incremental, orchestrator) | ✅ Completa |
-| **3** | Camada Silver (limpeza, extração LLM, agregação) | 🔲 Pendente |
-| **4** | Camada Gold (sentimento, personas, segmentação, analytics) | 🔲 Pendente |
-| **5** | Sistema de Agentes (pipeline, monitor, repair) | 🔲 Pendente |
-| **6** | Frontend Streamlit (3 dashboards) | 🔲 Pendente |
+| **1** | Fundação (config, storage, compute, events, LLM provider, **specs**) | ✅ Completa |
+| **2** | Camada Bronze (ingestão, incremental, orchestrator **spec-aware**) | ✅ Completa |
+| **3** | Camada Silver (limpeza, extração, agregação, **spec tools**) | ✅ Completa |
+| **4** | Camada Gold (**gerada pelo CodeGen Agent** a partir dos KPIs) | 🔲 Pendente |
+| **5** | Sistema de Agentes (CodeGen, pipeline, monitor, repair) | 🔲 Pendente |
+| **6** | Frontend Streamlit (**configuração** + 3 dashboards) | 🟡 Parcial |
 | **7** | Docker Compose | 🔲 Pendente |
 | **8** | Migração Databricks | 🔲 Pendente |
 
-## Fase 1 — Implementação das fundações
+## Fase 1 — Fundação
 
 ### O que foi implementado
 
 **`config/settings.py`** — Configuração centralizada via Pydantic Settings:
 - `RUNTIME_ENV` (local / databricks) — determina backends de storage e compute
-- Paths derivados automáticos para Bronze/Silver/Gold/Monitoring
+- Paths derivados automáticos para Bronze/Silver/Gold/Monitoring/**Specs**
 - Todas as variáveis de LLM, pipeline e frontend
 - Singleton via `get_settings()` com cache
 
@@ -190,6 +261,21 @@ A cadeia de fallback é automática: se o modelo primário falha, o sistema tent
 - `BudgetExceededError` quando orçamento é ultrapassado
 - Funciona com OpenAI, Anthropic, Google, Ollama, e 100+ providers
 
+**`pipeline/specs.py`** — Especificação do projeto:
+- `ProjectSpec`: modelo que armazena as 3 entradas obrigatórias (dados brutos, dicionário, KPIs)
+- `analisar_amostra()`: análise automática do schema dos dados (linhas, colunas, tipos, nulos)
+- `salvar_spec()` / `carregar_spec()`: persistência em disco (JSON + markdown)
+- Validação: verifica se todas as entradas estão presentes e acessíveis
+
+**`agents/codegen_agent.py`** — Agente gerador de código (scaffold):
+- `analisar_spec()`: análise LLM do dicionário + KPIs → identificação de colunas PII, JSON, timestamps
+- `gerar_plano_gold()`: gera plano de implementação para a camada Gold a partir dos KPIs
+
+**`agents/tools/spec_tools.py`** — Ferramentas de análise de specs:
+- `obter_preview_dados()`: preview das primeiras N linhas
+- `obter_estatisticas_colunas()`: estatísticas descritivas por coluna
+- `validar_spec_completa()`: validação detalhada para uso pelos agentes
+
 **`monitoring/models.py`** — Modelos de dados:
 - `PipelineRun`: registro de execução completa com steps
 - `StepRun`: registro de um step individual (Bronze/Silver/Gold)
@@ -202,52 +288,50 @@ A cadeia de fallback é automática: se o modelo primário falha, o sistema tent
 - Queries de agregação: custo total LLM, tokens totais
 - Singleton via `get_monitoring_store()`
 
-### Testes (34 passing)
-
-- `TestSettings`: configurações default, paths local, paths Databricks
-- `TestLLMConfig`: config default, cost tracking, budget exceeded
-- `TestLocalDeltaBackend`: write/read, append, versioning, not-exists, row count
-- `TestPolarsCompute`: SQL query via DuckDB, read parquet
-- `TestEventBus`: emit/subscribe, wildcard, error isolation
-- `TestMonitoringStore`: pipeline runs, agent actions, alerts
-- `TestSchemaValidation`: schema válido, coluna faltante, DataFrame vazio
-- `TestParseMetadata`: expansão de metadata JSON em colunas tipadas
-- `TestCastTypes`: cast de timestamp string → Datetime
-- `TestBronzeIngestion`: full ingestion, auto mode, incremental, no-new-data, metadata columns, schema error
-- `TestSimulator`: split de parquet em batches cronológicos
-- `TestOrchestrator`: run bronzestep, monitoring persistence, falha para pipeline
-
 ## Fase 2 — Camada Bronze
 
 ### O que foi implementado
 
 **`pipeline/bronze/ingestion.py`** — Ingestão completa Bronze:
 - Validação de schema contra dicionário de dados (14 colunas esperadas)
-- Parse da coluna `metadata` (JSON string) → 6 colunas tipadas: `meta_device`, `meta_city`, `meta_state`, `meta_response_time_sec`, `meta_is_business_hours`, `meta_lead_source`
+- Parse da coluna `metadata` (JSON string) → 6 colunas tipadas
 - Cast de `timestamp` string → `Datetime`
 - Adição de `_ingested_at` e `_source_file` para rastreabilidade
 - 3 modos: `full` (overwrite), `incremental` (append novos), `auto` (detecta automaticamente)
-- Incremental: filtra por timestamp e message_id para evitar duplicatas
-- Output: Delta table com 22 colunas, 153.228 rows
+- Path de dados pode vir da `ProjectSpec` (spec-aware)
 
-**`pipeline/bronze/simulator.py`** — Simulador de dados incrementais:
-- Split do parquet em N batches cronológicos (por timestamp)
-- Útil para testar ingestão incremental e o monitor agent
+**`pipeline/bronze/simulator.py`** — Simulador de dados incrementais
 
 **`pipeline/orchestrator.py`** — Orquestrador de pipeline:
-- `run_pipeline(layers)`: executa steps em sequência (Bronze → Silver → Gold)
-- Tracking de status por step (`pending` → `running` → `completed`/`failed`)
-- Emissão de eventos via EventBus a cada mudança de estado
-- Persistência automática no MonitoringStore
-- Falha em um step interrompe o pipeline e registra erro
-- Entry point para execução manual e agent-triggered
+- `run_pipeline(layers)`: executa steps em sequência
+- **Aceita `ProjectSpec`** para configurar paths e parâmetros dinamicamente
+- Carrega spec automaticamente do diretório configurado se disponível
 
-### Dados Reais Validados
+## Fase 3 — Camada Silver
+
+### O que foi implementado
+
+**`pipeline/silver/cleaning.py`** — Limpeza e deduplicação:
+- Dedup por status (sent+delivered → mantém delivered)
+- Flag `is_audio_transcription` com normalização do body
+
+**`pipeline/silver/extraction.py`** — Extração de entidades via regex:
+- CPF, email, CEP, telefone, placa de veículo, concorrentes
+- Mascaramento de PII com hash SHA-256 determinístico
+
+**`pipeline/silver/conversations.py`** — Agregação por conversa (~15k rows):
+- Contagens, tempos, entidades extraídas, outcome, identidade do lead
+
+**`frontend/pages/0_configuracao.py`** — Interface de configuração:
+- Upload de amostra de dados brutos (parquet/csv) com preview e schema
+- Editor de dicionário de dados (markdown)
+- Editor de descrição dos KPIs (markdown)
+- Salvar especificação e disparar pipeline
+
+### Testes (83 passando)
 
 ```
-Bronze table: 153.228 rows, 22 colunas
-- 15.000 conversas únicas
-- Período: 2026-02-01 → 2026-03-01
-- Delta version: 0
-- Incremental re-run: 0 rows (dedup correto)
+tests/test_phase1.py — 34 testes (fundação + specs)
+tests/test_phase2.py — 16 testes (bronze + orchestrator + spec integration)
+tests/test_phase3.py — 33 testes (silver + spec tools)
 ```

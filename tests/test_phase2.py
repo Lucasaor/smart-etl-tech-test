@@ -306,3 +306,24 @@ class TestOrchestrator:
 
         assert run.status.value == "failed"
         assert run.steps[0].error_message is not None
+
+    def test_run_bronze_with_spec(self, sample_parquet, tmp_path, monkeypatch):
+        """O orchestrator usa dados_brutos_path da spec quando disponível."""
+        from pipeline.orchestrator import PipelineOrchestrator
+        from pipeline.specs import ProjectSpec
+
+        _, temp_store = self._setup_orchestrator(sample_parquet, tmp_path, monkeypatch)
+
+        spec = ProjectSpec(
+            nome="test_spec",
+            dados_brutos_path=sample_parquet,
+            dicionario_dados="## Test dict",
+            descricao_kpis="## Test KPIs",
+        )
+
+        orch = PipelineOrchestrator(spec=spec)
+        orch.store = temp_store
+        run = orch.run_pipeline(layers=["bronze"])
+
+        assert run.status.value == "completed"
+        assert run.steps[0].rows_output > 0
