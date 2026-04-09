@@ -140,7 +140,7 @@ A cadeia de fallback é automática: se o modelo primário falha, o sistema tent
 | Fase | Descrição | Status |
 |------|-----------|--------|
 | **1** | Fundação (config, storage, compute, events, LLM provider) | ✅ Completa |
-| **2** | Camada Bronze (ingestão, incremental, orchestrator) | 🔲 Pendente |
+| **2** | Camada Bronze (ingestão, incremental, orchestrator) | ✅ Completa |
 | **3** | Camada Silver (limpeza, extração LLM, agregação) | 🔲 Pendente |
 | **4** | Camada Gold (sentimento, personas, segmentação, analytics) | 🔲 Pendente |
 | **5** | Sistema de Agentes (pipeline, monitor, repair) | 🔲 Pendente |
@@ -148,7 +148,7 @@ A cadeia de fallback é automática: se o modelo primário falha, o sistema tent
 | **7** | Docker Compose | 🔲 Pendente |
 | **8** | Migração Databricks | 🔲 Pendente |
 
-## Fase 1 — Implementação Atual
+## Fase 1 — Implementação das fundações
 
 ### O que foi implementado
 
@@ -202,7 +202,7 @@ A cadeia de fallback é automática: se o modelo primário falha, o sistema tent
 - Queries de agregação: custo total LLM, tokens totais
 - Singleton via `get_monitoring_store()`
 
-### Testes (19 passing)
+### Testes (34 passing)
 
 - `TestSettings`: configurações default, paths local, paths Databricks
 - `TestLLMConfig`: config default, cost tracking, budget exceeded
@@ -210,3 +210,44 @@ A cadeia de fallback é automática: se o modelo primário falha, o sistema tent
 - `TestPolarsCompute`: SQL query via DuckDB, read parquet
 - `TestEventBus`: emit/subscribe, wildcard, error isolation
 - `TestMonitoringStore`: pipeline runs, agent actions, alerts
+- `TestSchemaValidation`: schema válido, coluna faltante, DataFrame vazio
+- `TestParseMetadata`: expansão de metadata JSON em colunas tipadas
+- `TestCastTypes`: cast de timestamp string → Datetime
+- `TestBronzeIngestion`: full ingestion, auto mode, incremental, no-new-data, metadata columns, schema error
+- `TestSimulator`: split de parquet em batches cronológicos
+- `TestOrchestrator`: run bronzestep, monitoring persistence, falha para pipeline
+
+## Fase 2 — Camada Bronze
+
+### O que foi implementado
+
+**`pipeline/bronze/ingestion.py`** — Ingestão completa Bronze:
+- Validação de schema contra dicionário de dados (14 colunas esperadas)
+- Parse da coluna `metadata` (JSON string) → 6 colunas tipadas: `meta_device`, `meta_city`, `meta_state`, `meta_response_time_sec`, `meta_is_business_hours`, `meta_lead_source`
+- Cast de `timestamp` string → `Datetime`
+- Adição de `_ingested_at` e `_source_file` para rastreabilidade
+- 3 modos: `full` (overwrite), `incremental` (append novos), `auto` (detecta automaticamente)
+- Incremental: filtra por timestamp e message_id para evitar duplicatas
+- Output: Delta table com 22 colunas, 153.228 rows
+
+**`pipeline/bronze/simulator.py`** — Simulador de dados incrementais:
+- Split do parquet em N batches cronológicos (por timestamp)
+- Útil para testar ingestão incremental e o monitor agent
+
+**`pipeline/orchestrator.py`** — Orquestrador de pipeline:
+- `run_pipeline(layers)`: executa steps em sequência (Bronze → Silver → Gold)
+- Tracking de status por step (`pending` → `running` → `completed`/`failed`)
+- Emissão de eventos via EventBus a cada mudança de estado
+- Persistência automática no MonitoringStore
+- Falha em um step interrompe o pipeline e registra erro
+- Entry point para execução manual e agent-triggered
+
+### Dados Reais Validados
+
+```
+Bronze table: 153.228 rows, 22 colunas
+- 15.000 conversas únicas
+- Período: 2026-02-01 → 2026-03-01
+- Delta version: 0
+- Incremental re-run: 0 rows (dedup correto)
+```
