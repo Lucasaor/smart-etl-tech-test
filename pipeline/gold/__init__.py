@@ -1,1 +1,1 @@
-"""Gold layer — analytics, personas, sentiment, and segmentation."""
+"""Gold layer — analytics, personas, sentimento, segmentação e vendedores."""

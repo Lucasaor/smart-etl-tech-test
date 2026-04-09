@@ -99,7 +99,12 @@ O sistema **recebe como entrada** uma amostra de dados brutos, um dicionário de
 │   │   ├── cleaning.py            # Dedup status, normalização, flags
 │   │   ├── extraction.py          # Regex: PII, veículos, concorrentes
 │   │   └── conversations.py       # Agregação por conversa
-│   └── gold/                      # (Fase 4) Analytics — gerado pelo CodeGen Agent
+│   └── gold/                      # Analytics, personas, sentimento, segmentação
+│       ├── sentiment.py           # Sentimento por conversa (heurístico)
+│       ├── personas.py            # Classificação: Decidido/Pesquisador/Negociador/Fantasma/Indeciso
+│       ├── segmentation.py        # Segmentação multidimensional
+│       ├── analytics.py           # Funil, lead scoring, performance campanha
+│       └── vendor_analysis.py     # Métricas por vendedor
 │
 ├── agents/                        # Agentes de IA
 │   ├── llm_provider.py            # LiteLLM wrapper (retry, fallback, budget)
@@ -116,10 +121,11 @@ O sistema **recebe como entrada** uma amostra de dados brutos, um dicionário de
 │   └── pages/
 │       └── 0_configuracao.py      # Upload: dados brutos, dicionário, KPIs
 │
-├── tests/                         # Testes (83 testes passando)
+├── tests/                         # Testes (128 testes passando)
 │   ├── test_phase1.py             # Fundação + specs (34 testes)
 │   ├── test_phase2.py             # Bronze + orchestrator (16 testes)
-│   └── test_phase3.py             # Silver + spec tools (33 testes)
+│   ├── test_phase3.py             # Silver + spec tools (33 testes)
+│   └── test_phase4.py             # Gold + codegen agent (45 testes)
 │
 ├── data/
 │   ├── specs/                     # Especificações do projeto (input do usuário)
@@ -213,7 +219,7 @@ A cadeia de fallback é automática: se o modelo primário falha, o sistema tent
 | **1** | Fundação (config, storage, compute, events, LLM provider, **specs**) | ✅ Completa |
 | **2** | Camada Bronze (ingestão, incremental, orchestrator **spec-aware**) | ✅ Completa |
 | **3** | Camada Silver (limpeza, extração, agregação, **spec tools**) | ✅ Completa |
-| **4** | Camada Gold (**gerada pelo CodeGen Agent** a partir dos KPIs) | 🔲 Pendente |
+| **4** | Camada Gold (sentimento, personas, segmentação, analytics, vendedores) | ✅ Completa |
 | **5** | Sistema de Agentes (CodeGen, pipeline, monitor, repair) | 🔲 Pendente |
 | **6** | Frontend Streamlit (**configuração** + 3 dashboards) | 🟡 Parcial |
 | **7** | Docker Compose | 🔲 Pendente |
@@ -328,10 +334,57 @@ A cadeia de fallback é automática: se o modelo primário falha, o sistema tent
 - Editor de descrição dos KPIs (markdown)
 - Salvar especificação e disparar pipeline
 
-### Testes (83 passando)
+## Fase 4 — Camada Gold
+
+### O que foi implementado
+
+**`pipeline/gold/sentiment.py`** — Análise de sentimento por conversa:
+- Score heurístico baseado em 4 fatores: outcome (peso 0.5), engajamento do lead (0.2), tempo de resposta (0.15), duração (0.15)
+- Classificação em positivo/neutro/negativo com score contínuo [-1, 1]
+- Coluna `sentimento_fatores` para explicabilidade
+- Output: tabela Gold ~15k rows com sentimento por conversa
+
+**`pipeline/gold/personas.py`** — Classificação de personas de leads:
+- 5 personas: **Decidido** (fecha rápido), **Pesquisador** (muitas perguntas), **Negociador** (longo, compara), **Fantasma** (ghosting), **Indeciso** (sem decisão)
+- Sistema de scoring multi-dimensão: cada conversa recebe score em todas as personas, a maior ganha
+- Confiança (0-1) e fatores transparentes por conversa
+
+**`pipeline/gold/segmentation.py`** — Segmentação multidimensional:
+- **Engajamento**: alto (≥15 msgs) / médio (≥6) / baixo
+- **Velocidade de resposta**: rápido (<2min) / moderado / lento
+- **Veículo**: com/sem veículo mencionado
+- **Região**: sudeste/sul/nordeste/centro-oeste/norte
+- **Origem**: google/facebook/instagram/indicação/outros
+- **Duração**: flash/curta/média/longa
+- **Qualificação do lead**: alta (≥2 PII) / média / baixa
+
+**`pipeline/gold/analytics.py`** — Analytics e KPIs:
+- **Funil de conversão**: contagem e percentual por outcome
+- **Lead scoring** (0-100): engajamento (30pts), tempo resposta (25pts), PII compartilhada (20pts), profundidade conversa (15pts), veículo (10pts)
+- **Performance por campanha**: conversas, vendas, taxa conversão, tempo resposta
+
+**`pipeline/gold/vendor_analysis.py`** — Métricas por vendedor:
+- Contagens: total conversas, vendas, ghosting, perdidos por preço/concorrente
+- Taxa de conversão e taxa de ghosting
+- Média de mensagens, tempo de resposta, duração
+- **Score do vendedor** (0-100): conversão (50%), retenção (20%), velocidade (30%)
+
+**`agents/codegen_agent.py`** — Agente gerador de código (aprimorado):
+- `recomendar_modulos_gold()`: recomendação heurística sem LLM — analisa palavras-chave nos KPIs
+- `GOLD_MODULES` registry: catálogo de módulos disponíveis com metadata
+- `analisar_spec()`: agora inclui campo `modulos_gold_recomendados`
+- Fallback inteligente: se LLM indisponível, recomenda todos os módulos
+
+**`pipeline/orchestrator.py`** — Gold step integrado:
+- `_run_gold()`: executa todos os 5 módulos Gold em sequência
+- Paths configuráveis via `settings.gold_*_path`
+- Retorno consolidado com stats de cada módulo
+
+### Testes (128 passando)
 
 ```
 tests/test_phase1.py — 34 testes (fundação + specs)
 tests/test_phase2.py — 16 testes (bronze + orchestrator + spec integration)
 tests/test_phase3.py — 33 testes (silver + spec tools)
+tests/test_phase4.py — 45 testes (gold + codegen agent)
 ```

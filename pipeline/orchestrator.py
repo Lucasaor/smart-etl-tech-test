@@ -156,7 +156,7 @@ class PipelineOrchestrator:
         return {
             "bronze": self._run_bronze,
             "silver": self._run_silver,
-            # "gold" será adicionado na Fase 4 (gerado pelo CodeGen Agent)
+            "gold": self._run_gold,
         }
 
     def _run_bronze(self) -> dict:
@@ -195,4 +195,37 @@ class PipelineOrchestrator:
             **silver_stats,
             "conversations_written": agg_stats["total_conversations"],
             "rows_written": silver_stats["rows_written"],
+        }
+
+    def _run_gold(self) -> dict:
+        """Executa os steps Gold: sentimento, personas, segmentação, analytics e vendedores."""
+        from pipeline.gold.analytics import gerar_gold_analytics
+        from pipeline.gold.personas import gerar_gold_personas
+        from pipeline.gold.segmentation import gerar_gold_segmentation
+        from pipeline.gold.sentiment import gerar_gold_sentiment
+        from pipeline.gold.vendor_analysis import gerar_gold_vendor
+
+        silver_conv = self.settings.silver_conversations_path
+
+        sentiment_stats = gerar_gold_sentiment(silver_conv, self.settings.gold_sentiment_path)
+        personas_stats = gerar_gold_personas(silver_conv, self.settings.gold_personas_path)
+        segmentation_stats = gerar_gold_segmentation(silver_conv, self.settings.gold_segmentation_path)
+        analytics_stats = gerar_gold_analytics(silver_conv, self.settings.gold_analytics_path)
+        vendor_stats = gerar_gold_vendor(silver_conv, self.settings.gold_vendor_path)
+
+        total_rows = (
+            sentiment_stats["rows_written"]
+            + personas_stats["rows_written"]
+            + segmentation_stats["rows_written"]
+            + analytics_stats["rows_written"]
+            + vendor_stats["rows_written"]
+        )
+
+        return {
+            "sentiment": sentiment_stats,
+            "personas": personas_stats,
+            "segmentation": segmentation_stats,
+            "analytics": analytics_stats,
+            "vendor": vendor_stats,
+            "rows_written": total_rows,
         }

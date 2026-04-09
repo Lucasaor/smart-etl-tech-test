@@ -23,6 +23,41 @@ from pipeline.specs import ProjectSpec
 
 logger = structlog.get_logger(__name__)
 
+# ─── Módulos Gold disponíveis ────────────────────────────────────────────────
+
+GOLD_MODULES = {
+    "sentiment": {
+        "nome": "Análise de Sentimento",
+        "modulo": "pipeline.gold.sentiment",
+        "funcao": "gerar_gold_sentiment",
+        "descricao": "Classifica conversas em sentimento positivo/neutro/negativo via heurísticas comportamentais.",
+    },
+    "personas": {
+        "nome": "Classificação de Personas",
+        "modulo": "pipeline.gold.personas",
+        "funcao": "gerar_gold_personas",
+        "descricao": "Classifica leads em personas (Decidido, Pesquisador, Negociador, Fantasma, Indeciso).",
+    },
+    "segmentation": {
+        "nome": "Segmentação Multidimensional",
+        "modulo": "pipeline.gold.segmentation",
+        "funcao": "gerar_gold_segmentation",
+        "descricao": "Segmenta conversas por engajamento, velocidade, veículo, região, origem e qualificação.",
+    },
+    "analytics": {
+        "nome": "Analytics e KPIs",
+        "modulo": "pipeline.gold.analytics",
+        "funcao": "gerar_gold_analytics",
+        "descricao": "Funil de conversão, lead scoring, performance por campanha.",
+    },
+    "vendor_analysis": {
+        "nome": "Análise por Vendedor",
+        "modulo": "pipeline.gold.vendor_analysis",
+        "funcao": "gerar_gold_vendor",
+        "descricao": "Métricas por vendedor: conversão, tempo de resposta, score de performance.",
+    },
+}
+
 
 @dataclass
 class AnaliseEspecificacao:
@@ -36,6 +71,7 @@ class AnaliseEspecificacao:
     coluna_agrupamento: str | None = None
     kpis_identificados: list[str] = field(default_factory=list)
     transformacoes_sugeridas: list[str] = field(default_factory=list)
+    modulos_gold_recomendados: list[str] = field(default_factory=list)
     resumo: str = ""
 
 
@@ -46,6 +82,7 @@ class CodeGenAgent:
       1. Analisar o dicionário de dados e identificar padrões
       2. Planejar transformações para cada camada
       3. Gerar código Python para a camada Gold baseado nos KPIs
+      4. Recomendar quais módulos Gold devem ser ativados
     """
 
     def __init__(self, llm: LLMProvider | None = None) -> None:
@@ -74,6 +111,10 @@ class CodeGenAgent:
             ]
 
         # Análise via LLM do dicionário + KPIs
+        modulos_disponiveis = "\n".join(
+            f"  - {k}: {v['descricao']}" for k, v in GOLD_MODULES.items()
+        )
+
         prompt_sistema = (
             "Você é um engenheiro de dados especialista em pipelines de transformação. "
             "Analise o dicionário de dados e a descrição dos KPIs fornecidos. "
@@ -84,14 +125,16 @@ class CodeGenAgent:
             "coluna_id (nome da coluna de ID principal), "
             "coluna_agrupamento (coluna para agrupar registros, ex: conversation_id), "
             "kpis_identificados (lista de KPIs extraídos da descrição), "
-            "transformacoes_sugeridas (lista de transformações necessárias). "
+            "transformacoes_sugeridas (lista de transformações necessárias), "
+            "modulos_gold_recomendados (lista dos módulos Gold a ativar, escolhendo entre os disponíveis). "
             "Responda APENAS o JSON, sem explicações."
         )
 
         prompt_usuario = (
             f"## Dicionário de Dados\n\n{spec.dicionario_dados}\n\n"
             f"## Descrição dos KPIs\n\n{spec.descricao_kpis}\n\n"
-            f"## Colunas Detectadas\n\n{', '.join(analise.colunas_identificadas)}"
+            f"## Colunas Detectadas\n\n{', '.join(analise.colunas_identificadas)}\n\n"
+            f"## Módulos Gold Disponíveis\n\n{modulos_disponiveis}"
         )
 
         try:
@@ -112,16 +155,22 @@ class CodeGenAgent:
                 analise.transformacoes_sugeridas = resposta.get(
                     "transformacoes_sugeridas", []
                 )
+                analise.modulos_gold_recomendados = resposta.get(
+                    "modulos_gold_recomendados", list(GOLD_MODULES.keys())
+                )
 
             logger.info(
                 "especificacao_analisada",
                 kpis=len(analise.kpis_identificados),
                 transformacoes=len(analise.transformacoes_sugeridas),
+                modulos_gold=analise.modulos_gold_recomendados,
             )
 
         except Exception as e:
             logger.warning("analise_llm_falhou", erro=str(e))
             analise.resumo = f"Análise LLM não disponível: {e}"
+            # Fallback: recomendar todos os módulos
+            analise.modulos_gold_recomendados = list(GOLD_MODULES.keys())
 
         return analise
 
@@ -175,3 +224,38 @@ class CodeGenAgent:
         except Exception as e:
             logger.warning("geracao_plano_gold_falhou", erro=str(e))
             return {"modulos": [], "erro": str(e)}
+
+    def recomendar_modulos_gold(self, spec: ProjectSpec) -> list[str]:
+        """Recomenda quais módulos Gold devem ser executados.
+
+        Análise heurística (sem LLM) dos KPIs descritos para determinar
+        quais módulos Gold são relevantes.
+
+        Args:
+            spec: Especificação do projeto.
+
+        Returns:
+            Lista de nomes dos módulos Gold recomendados.
+        """
+        kpis_lower = spec.descricao_kpis.lower()
+        recomendados = []
+
+        # Mapeamento de palavras-chave → módulos
+        _keyword_map = {
+            "sentiment": ["sentimento", "sentiment", "satisfação", "humor", "opinião"],
+            "personas": ["persona", "perfil", "classificação", "tipo de lead", "comportamento"],
+            "segmentation": ["segmentação", "segmento", "audiência", "região", "geografia", "engajamento"],
+            "analytics": ["funil", "conversão", "kpi", "score", "lead scoring", "campanha", "performance"],
+            "vendor_analysis": ["vendedor", "agente", "agent", "atendente", "time de vendas"],
+        }
+
+        for modulo, keywords in _keyword_map.items():
+            if any(kw in kpis_lower for kw in keywords):
+                recomendados.append(modulo)
+
+        # Se nenhum KPI específico detectado, ativar todos
+        if not recomendados:
+            recomendados = list(GOLD_MODULES.keys())
+
+        logger.info("modulos_gold_recomendados", modulos=recomendados)
+        return recomendados

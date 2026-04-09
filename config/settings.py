@@ -103,6 +103,41 @@ class Settings(BaseSettings):
 
     @computed_field  # type: ignore[prop-decorator]
     @property
+    def gold_sentiment_path(self) -> str:
+        if self.runtime_env == RuntimeEnv.DATABRICKS:
+            return "/mnt/delta/gold/sentiment"
+        return str(Path(self.data_root) / "gold" / "sentiment")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def gold_personas_path(self) -> str:
+        if self.runtime_env == RuntimeEnv.DATABRICKS:
+            return "/mnt/delta/gold/personas"
+        return str(Path(self.data_root) / "gold" / "personas")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def gold_segmentation_path(self) -> str:
+        if self.runtime_env == RuntimeEnv.DATABRICKS:
+            return "/mnt/delta/gold/segmentation"
+        return str(Path(self.data_root) / "gold" / "segmentation")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def gold_analytics_path(self) -> str:
+        if self.runtime_env == RuntimeEnv.DATABRICKS:
+            return "/mnt/delta/gold/analytics"
+        return str(Path(self.data_root) / "gold" / "analytics")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def gold_vendor_path(self) -> str:
+        if self.runtime_env == RuntimeEnv.DATABRICKS:
+            return "/mnt/delta/gold/vendor_analysis"
+        return str(Path(self.data_root) / "gold" / "vendor_analysis")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
     def monitoring_db_path(self) -> str:
         if self.runtime_env == RuntimeEnv.DATABRICKS:
             return f"/mnt/delta/monitoring"
