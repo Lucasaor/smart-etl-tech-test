@@ -109,8 +109,14 @@ O sistema **recebe como entrada** uma amostra de dados brutos, um dicionário de
 ├── agents/                        # Agentes de IA
 │   ├── llm_provider.py            # LiteLLM wrapper (retry, fallback, budget)
 │   ├── codegen_agent.py           # Agente gerador: spec → pipeline code
+│   ├── pipeline_agent.py          # LangGraph: execução end-to-end do pipeline
+│   ├── monitor_agent.py           # LangGraph: monitoramento contínuo + alertas
+│   ├── repair_agent.py            # LangGraph: diagnóstico e auto-correção de falhas
 │   └── tools/
-│       └── spec_tools.py          # Ferramentas de análise de especificações
+│       ├── spec_tools.py          # Ferramentas de análise de especificações
+│       ├── data_tools.py          # Leitura, validação e amostragem de tabelas Delta
+│       ├── pipeline_tools.py      # Disparar runs, status, histórico
+│       └── quality_tools.py       # Nulos, duplicatas, schema, integridade
 │
 ├── monitoring/                    # Monitoramento
 │   ├── models.py                  # Modelos: PipelineRun, StepRun, AgentAction, Alert
@@ -119,13 +125,17 @@ O sistema **recebe como entrada** uma amostra de dados brutos, um dicionário de
 ├── frontend/                      # Dashboard Streamlit
 │   ├── app.py                     # Entry point principal
 │   └── pages/
-│       └── 0_configuracao.py      # Upload: dados brutos, dicionário, KPIs
+│       ├── 0_configuracao.py      # Upload: dados brutos, dicionário, KPIs
+│       ├── 1_pipeline_monitor.py  # Status, histórico, timeline, alertas
+│       ├── 2_agent_monitor.py     # Feed de ações, custos LLM, tokens
+│       └── 3_gold_dashboard.py    # KPIs, gráficos, export de dados
 │
-├── tests/                         # Testes (128 testes passando)
+├── tests/                         # Testes (224 testes passando)
 │   ├── test_phase1.py             # Fundação + specs (34 testes)
 │   ├── test_phase2.py             # Bronze + orchestrator (16 testes)
 │   ├── test_phase3.py             # Silver + spec tools (33 testes)
-│   └── test_phase4.py             # Gold + codegen agent (45 testes)
+│   ├── test_phase4.py             # Gold + codegen agent (45 testes)
+│   └── test_phase5.py             # Agent system + LangGraph (96 testes)
 │
 ├── data/
 │   ├── specs/                     # Especificações do projeto (input do usuário)
@@ -134,8 +144,17 @@ O sistema **recebe como entrada** uma amostra de dados brutos, um dicionário de
 │   ├── gold/                      # Tabelas Delta Gold
 │   └── monitoring/                # SQLite de monitoramento
 │
-├── docker/                        # (Fase 7) Docker Compose
-└── databricks/                    # (Fase 8) Notebooks Databricks
+├── docker/                        # Containerização
+│   ├── Dockerfile                 # Imagem Python 3.11 + deps
+│   └── docker-compose.yml         # Streamlit + Ollama (opcional)
+│
+└── databricks/                    # Migração Databricks
+    ├── setup_dbfs.py              # Upload de dados para DBFS
+    └── notebooks/
+        ├── 01_bronze.py           # Ingestão (PySpark + Delta)
+        ├── 02_silver.py           # Limpeza + Extração + Agregação
+        ├── 03_gold.py             # Sentimento, Personas, Segmentação, Analytics, Vendedores
+        └── 04_agent_orchestrator.py  # Orquestração completa + detecção de novos dados
 ```
 
 ## Entradas do Sistema
@@ -212,6 +231,66 @@ OLLAMA_BASE_URL=http://localhost:11434
 
 A cadeia de fallback é automática: se o modelo primário falha, o sistema tenta o `LLM_FALLBACK_MODEL`. Custos são rastreados automaticamente com budget control (`LLM_MAX_COST_PER_RUN`).
 
+## Docker Compose
+
+Para execução containerizada sem configuração local:
+
+```bash
+# Build e execução completa
+docker-compose -f docker/docker-compose.yml up --build
+
+# Apenas Streamlit (com API externas — OpenAI, Anthropic, etc.)
+docker-compose -f docker/docker-compose.yml up streamlit
+
+# Com Ollama local (sem necessidade de API key)
+docker-compose -f docker/docker-compose.yml --profile ollama up
+```
+
+Acesse `http://localhost:8501` para o dashboard.
+
+**Serviços disponíveis:**
+
+| Serviço | Porta | Descrição |
+|---------|-------|-----------|
+| `streamlit` | 8501 | Dashboard + Pipeline (sempre ativo) |
+| `ollama` | 11434 | LLM local (perfil `ollama`) |
+| `ollama-setup` | — | Download automático do modelo llama3 |
+
+Os dados persistem no volume Docker `pipeline-data`. Configure API keys via `.env`.
+
+## Migração Databricks
+
+### Setup inicial
+
+```bash
+# Instalar SDK
+pip install databricks-sdk
+
+# Configurar credenciais
+export DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
+export DATABRICKS_TOKEN=dapi...
+
+# Upload de dados para DBFS
+python databricks/setup_dbfs.py --source ./conversations_bronze.parquet
+```
+
+### Notebooks
+
+Importe os notebooks de `databricks/notebooks/` para o Workspace:
+
+| Notebook | Camada | Descrição |
+|----------|--------|-----------|
+| `01_bronze.py` | Bronze | Ingestão com PySpark, validação de schema, Delta incremental |
+| `02_silver.py` | Silver | Dedup, extração de entidades (UDFs), agregação por conversa |
+| `03_gold.py` | Gold | Sentimento, personas, segmentação, lead scoring, vendedores |
+| `04_agent_orchestrator.py` | Orquestração | Execução sequencial, verificação de saúde, detecção de novos dados |
+
+### Limitações do Community Edition
+
+- **Sem Workflows/Jobs**: pipeline "vivo" simulado via execução manual periódica ou `dbutils.notebook.run()`
+- **Cluster auto-termina**: após 2h de inatividade; re-execução necessária
+- **Sem triggers**: monitoramento de novos dados feito manualmente via notebook 04
+
 ## Status de Implementação
 
 | Fase | Descrição | Status |
@@ -220,10 +299,10 @@ A cadeia de fallback é automática: se o modelo primário falha, o sistema tent
 | **2** | Camada Bronze (ingestão, incremental, orchestrator **spec-aware**) | ✅ Completa |
 | **3** | Camada Silver (limpeza, extração, agregação, **spec tools**) | ✅ Completa |
 | **4** | Camada Gold (sentimento, personas, segmentação, analytics, vendedores) | ✅ Completa |
-| **5** | Sistema de Agentes (CodeGen, pipeline, monitor, repair) | 🔲 Pendente |
-| **6** | Frontend Streamlit (**configuração** + 3 dashboards) | 🟡 Parcial |
-| **7** | Docker Compose | 🔲 Pendente |
-| **8** | Migração Databricks | 🔲 Pendente |
+| **5** | Sistema de Agentes (tools, pipeline, monitor, repair) | ✅ Completa |
+| **6** | Frontend Streamlit (configuração + 3 dashboards) | ✅ Completa |
+| **7** | Docker Compose (Streamlit + Ollama opcional) | ✅ Completa |
+| **8** | Migração Databricks (4 notebooks + setup DBFS) | ✅ Completa |
 
 ## Fase 1 — Fundação
 
@@ -380,11 +459,64 @@ A cadeia de fallback é automática: se o modelo primário falha, o sistema tent
 - Paths configuráveis via `settings.gold_*_path`
 - Retorno consolidado com stats de cada módulo
 
-### Testes (128 passando)
+### Testes (224 passando)
 
 ```
 tests/test_phase1.py — 34 testes (fundação + specs)
 tests/test_phase2.py — 16 testes (bronze + orchestrator + spec integration)
 tests/test_phase3.py — 33 testes (silver + spec tools)
 tests/test_phase4.py — 45 testes (gold + codegen agent)
+tests/test_phase5.py — 96 testes (agent tools + LangGraph agents)
 ```
+
+## Fase 5 — Sistema de Agentes
+
+### O que foi implementado
+
+**`agents/tools/data_tools.py`** — Ferramentas de dados para agentes:
+- `listar_tabelas()`: lista todas as tabelas do pipeline com status (existe/linhas/versão)
+- `ler_tabela()`: lê até N linhas de uma tabela por nome lógico ou path
+- `obter_schema()`: retorna esquema {coluna: tipo} de qualquer tabela
+- `amostrar_tabela()`: amostragem aleatória com seed fixo
+- `contar_linhas()` / `tabela_existe()`: consultas rápidas
+- Resolução automática de nomes lógicos (`"bronze"` → path completo)
+
+**`agents/tools/pipeline_tools.py`** — Ferramentas de controle do pipeline:
+- `executar_pipeline()`: dispara execução completa ou de camadas específicas
+- `executar_camada()`: executa uma única camada do pipeline
+- `obter_status_ultimo_run()`: consulta última execução
+- `obter_historico_runs()`: histórico de execuções com detalhes
+- `obter_metricas_llm()`: custo total e tokens consumidos
+- `obter_alertas()`: alertas abertos ou todos
+
+**`agents/tools/quality_tools.py`** — Ferramentas de qualidade de dados:
+- `verificar_nulos()`: contagem e percentual de nulos por coluna
+- `verificar_duplicatas()`: detecção de duplicatas por colunas-chave
+- `comparar_schemas()`: comparação entre schemas de duas tabelas
+- `verificar_integridade()`: score de saúde (0-100) com classificação (saudável/atenção/crítico)
+- `validar_valores()`: validação de valores contra lista de valores esperados
+
+**`agents/pipeline_agent.py`** — LangGraph state machine para execução end-to-end:
+- Grafo: `load_spec` → `analyze_data` → `plan` → `execute_bronze` → `execute_silver` → `execute_gold` → `validate` → `complete`
+- Planejamento inteligente: determina quais camadas executar com base no estado das tabelas
+- Roteamento condicional: pula camadas ou aborta em erro
+- Registra todas as ações no MonitoringStore + EventBus
+- Cria alertas automáticos em caso de falha
+- API: `run_pipeline_agent(spec_path, spec, layers)`
+
+**`agents/monitor_agent.py`** — LangGraph loop de monitoramento contínuo:
+- Grafo cíclico: `check_new_data` → `check_health` → `decide` → `trigger_pipeline` → `check_continue` → (loop)
+- Detecta novos dados na Bronze sem Silver correspondente
+- Verifica saúde de todas as tabelas existentes (quality_tools)
+- Dispara pipeline_agent automaticamente quando necessário
+- Gera alertas para problemas de saúde de dados
+- API: `run_monitor_agent(max_ciclos)`
+
+**`agents/repair_agent.py`** — LangGraph agent para auto-correção de falhas:
+- Grafo: `get_error` → `analyze` → `propose_fix` → `apply_fix` → `retry` → `validate` → (loop ou fim)
+- **5 estratégias**: retry, skip_layer, retry_from_start, data_quality_fix, no_action
+- Análise heurística (sem LLM): file not found, schema mismatch, permission denied, tabela ausente
+- Análise LLM opcional: enriquece diagnóstico quando disponível
+- Múltiplas tentativas com loop automático
+- Escala para operador humano via alerta quando esgota tentativas
+- API: `run_repair_agent(erro, camada_falha, max_tentativas)`

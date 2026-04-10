@@ -1,0 +1,97 @@
+# =============================================================================
+# Agentic Pipeline — Docker Compose
+# =============================================================================
+# Sobe o dashboard Streamlit e opcionalmente um servidor Ollama local
+# para execução de LLMs sem depender de APIs externas.
+#
+# Uso:
+#   docker-compose -f docker/docker-compose.yml up
+#   docker-compose -f docker/docker-compose.yml up --build
+#
+# Modo sem Ollama (usa OpenAI/Anthropic):
+#   docker-compose -f docker/docker-compose.yml up streamlit
+#
+# Modo com Ollama (sem API key):
+#   docker-compose -f docker/docker-compose.yml --profile ollama up
+# =============================================================================
+
+services:
+  # ─── Streamlit Frontend + Pipeline ──────────────────────────────────────────
+  streamlit:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: agentic-pipeline-app
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    volumes:
+      - pipeline-data:/app/data
+      - ../Dicionario_de_Dados.md:/app/Dicionario_de_Dados.md:ro
+    environment:
+      - RUNTIME_ENV=local
+      - DATA_ROOT=/app/data
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+      - LLM_FALLBACK_MODEL=${LLM_FALLBACK_MODEL:-ollama/llama3}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - LLM_MAX_COST_PER_RUN=${LLM_MAX_COST_PER_RUN:-5.00}
+    env_file:
+      - ../.env
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_started
+        required: false
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+  # ─── Ollama — LLM local (opcional) ─────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: agentic-pipeline-ollama
+    profiles:
+      - ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+
+  # ─── Setup Ollama — Baixa modelos na primeira execução ─────────────────────
+  ollama-setup:
+    image: curlimages/curl:latest
+    container_name: agentic-pipeline-ollama-setup
+    profiles:
+      - ollama
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >
+      sh -c "
+        echo 'Baixando modelo llama3...' &&
+        curl -s http://ollama:11434/api/pull -d '{\"name\": \"llama3\"}' &&
+        echo 'Modelo llama3 pronto.'
+      "
+
+volumes:
+  pipeline-data:
+    driver: local
+  ollama-data:
+    driver: local
