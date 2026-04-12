@@ -13,6 +13,9 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+from frontend.theme import apply_theme
+apply_theme()
+
 st.title("Agentic Data Pipeline")
 st.markdown(
     """

@@ -65,6 +65,25 @@ MODELS: dict[str, ModelSpec] = {
         cost_per_1k_output=0.0,
         supports_json_mode=True,
     ),
+    # Claude 4.x models
+    "anthropic/claude-haiku-4-5": ModelSpec(
+        model="anthropic/claude-haiku-4-5",
+        max_tokens=8192,
+        cost_per_1k_input=0.0008,
+        cost_per_1k_output=0.004,
+    ),
+    "anthropic/claude-opus-4-6": ModelSpec(
+        model="anthropic/claude-opus-4-6",
+        max_tokens=8192,
+        cost_per_1k_input=0.015,
+        cost_per_1k_output=0.075,
+    ),
+    "anthropic/claude-sonnet-4-6": ModelSpec(
+        model="anthropic/claude-sonnet-4-6",
+        max_tokens=8192,
+        cost_per_1k_input=0.003,
+        cost_per_1k_output=0.015,
+    ),
 }
 
 
@@ -108,18 +127,54 @@ class LLMConfig:
         return self.accumulated_cost >= self.max_cost_per_run
 
 
+def _resolve_model(model_str: str) -> ModelSpec:
+    """Resolve a model string to a ModelSpec."""
+    if model_str in MODELS:
+        return MODELS[model_str]
+    settings = get_settings()
+    return ModelSpec(model=model_str, temperature=settings.llm_temperature)
+
+
 def get_llm_config() -> LLMConfig:
-    """Build LLMConfig from application settings."""
+    """Build default LLMConfig from application settings."""
     settings = get_settings()
 
-    def _resolve(model_str: str) -> ModelSpec:
-        if model_str in MODELS:
-            return MODELS[model_str]
-        # Unknown model — create a generic spec
-        return ModelSpec(model=model_str, temperature=settings.llm_temperature)
+    primary = _resolve_model(settings.llm_model)
+    fallbacks = [_resolve_model(settings.llm_fallback_model)] if settings.llm_fallback_model else []
 
-    primary = _resolve(settings.llm_model)
-    fallbacks = [_resolve(settings.llm_fallback_model)] if settings.llm_fallback_model else []
+    return LLMConfig(
+        primary=primary,
+        fallbacks=fallbacks,
+        max_cost_per_run=settings.llm_max_cost_per_run,
+    )
+
+
+def get_llm_config_for_role(role: str) -> LLMConfig:
+    """Build a role-specific LLMConfig.
+
+    Roles:
+      - 'codegen': uses llm_codegen_model (falls back to llm_model)
+      - 'repair':  uses llm_repair_model  (falls back to llm_model)
+      - anything else: uses default llm_model
+    """
+    settings = get_settings()
+
+    model_map = {
+        "codegen": settings.llm_codegen_model,
+        "repair": settings.llm_repair_model,
+    }
+
+    role_model = model_map.get(role, "") or settings.llm_model
+    primary = _resolve_model(role_model)
+
+    # Fallback chain: role-specific primary → default primary → fallback
+    fallbacks: list[ModelSpec] = []
+    if role_model != settings.llm_model:
+        fallbacks.append(_resolve_model(settings.llm_model))
+    if settings.llm_fallback_model:
+        fb = _resolve_model(settings.llm_fallback_model)
+        if fb.model != primary.model:
+            fallbacks.append(fb)
 
     return LLMConfig(
         primary=primary,

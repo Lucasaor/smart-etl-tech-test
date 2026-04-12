@@ -14,7 +14,8 @@ FROM python:3.11-slim AS base
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app
 
 # Dependências de sistema mínimas
 RUN apt-get update && \
@@ -27,9 +28,12 @@ WORKDIR /app
 
 # ─── Instalar dependências Python ─────────────────────────────────────────────
 
-COPY pyproject.toml ./
+COPY pyproject.toml README.md ./
 RUN pip install --upgrade pip && \
-    pip install -e "." 2>/dev/null || pip install .
+    mkdir -p config core pipeline agents monitoring && \
+    touch config/__init__.py core/__init__.py pipeline/__init__.py agents/__init__.py monitoring/__init__.py && \
+    pip install . && \
+    rm -rf config core pipeline agents monitoring
 
 # ─── Copiar código-fonte ──────────────────────────────────────────────────────
 
@@ -39,6 +43,7 @@ COPY pipeline/ pipeline/
 COPY agents/ agents/
 COPY monitoring/ monitoring/
 COPY frontend/ frontend/
+COPY logo_dark.png logo_dark.png
 COPY .env.example .env.example
 
 # ─── Volume para dados persistentes ──────────────────────────────────────────

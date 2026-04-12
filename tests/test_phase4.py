@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import textwrap
 from pathlib import Path
 
 import polars as pl
@@ -568,12 +569,28 @@ class TestGerarGoldVendor:
 
 class TestOrchestratorGold:
     def test_run_gold_step(self, tmp_path, monkeypatch):
-        """Testa que o orchestrator executa o step Gold completo."""
-        from config.settings import Settings
+        """Testa que o orchestrator executa o step Gold com código gerado."""
+        from config.settings import Settings, get_settings
+        from core.storage import get_storage_backend
+        from monitoring.store import MonitoringStore, get_monitoring_store
+        from core.events import get_event_bus
         from pipeline.orchestrator import PipelineOrchestrator
+        from agents.codegen_agent import GeneratedCode, PipelineGerado, salvar_pipeline_gerado
+
+        # Limpar caches de singletons
+        get_settings.cache_clear()
+        get_storage_backend.cache_clear()
+        get_monitoring_store.cache_clear()
+        get_event_bus.cache_clear()
 
         monkeypatch.delenv("RUNTIME_ENV", raising=False)
-        settings = Settings(data_root=str(tmp_path / "data"))
+        settings = Settings(data_root=str(tmp_path / "data"), spec_dir=str(tmp_path / "specs"))
+        monkeypatch.setattr("config.settings.get_settings", lambda: settings)
+        monkeypatch.setattr("pipeline.orchestrator.get_settings", lambda: settings)
+        monkeypatch.setattr("pipeline.executor.get_settings", lambda: settings)
+        monkeypatch.setattr("pipeline.executor.get_storage_backend", lambda: LocalDeltaBackend())
+        temp_store = MonitoringStore(str(tmp_path / "mon.db"))
+        monkeypatch.setattr("pipeline.orchestrator.get_monitoring_store", lambda: temp_store)
 
         # Precondição: tabela Silver conversations existe
         conv_path = settings.silver_conversations_path
@@ -589,9 +606,32 @@ class TestOrchestratorGold:
         # Criar gold dir
         Path(settings.gold_path).mkdir(parents=True, exist_ok=True)
 
+        # Fornecer código Gold gerado que cria uma tabela simples
+        gold_code = textwrap.dedent("""\
+            import polars as pl
+
+            def run(read_table, write_table, settings):
+                df_conv = read_table(settings["silver_conversations_path"])
+                # Criar tabela de resumo simples
+                result = df_conv.select([
+                    "conversation_id",
+                    pl.lit("neutro").alias("sentimento"),
+                    pl.lit(0.5).alias("score"),
+                ])
+                gold_path = settings.get("gold_test_path", settings["gold_base_path"] + "/test")
+                write_table(result, gold_path)
+                return {"rows_written": len(result), "status": "ok"}
+        """)
+        pg = PipelineGerado(
+            gold=[GeneratedCode(camada="gold_test", codigo=gold_code, nome_funcao="run", descricao="test gold")],
+        )
+        generated_dir = str(Path(settings.spec_path) / "generated")
+        Path(generated_dir).mkdir(parents=True, exist_ok=True)
+        salvar_pipeline_gerado(pg, generated_dir)
+
         orch = PipelineOrchestrator()
-        # Injetar settings para usar tmp_path
         orch.settings = settings
+        orch.store = temp_store
 
         run = orch.run_pipeline(layers=["gold"], trigger="test")
 
@@ -600,78 +640,72 @@ class TestOrchestratorGold:
         assert run.steps[0].step_name == "gold"
         assert run.steps[0].rows_output > 0
 
-        # Verificar que as tabelas Gold foram criadas
-        assert backend.table_exists(settings.gold_sentiment_path)
-        assert backend.table_exists(settings.gold_personas_path)
-        assert backend.table_exists(settings.gold_segmentation_path)
-        assert backend.table_exists(settings.gold_analytics_path)
-        assert backend.table_exists(settings.gold_vendor_path)
-
 
 # ─── CodeGen Agent tests ─────────────────────────────────────────────────────
 
 
-class TestCodeGenAgentRecommendations:
-    """Testa a recomendação heurística de módulos Gold (sem LLM)."""
+class TestCodeGenAgentAPI:
+    """Testa a API do CodeGenAgent (sem LLM — testa dataclasses e utils)."""
 
-    def test_recommend_sentiment_from_kpis(self):
-        from agents.codegen_agent import CodeGenAgent
-        from pipeline.specs import ProjectSpec
+    def test_generated_code_dataclass(self):
+        from agents.codegen_agent import GeneratedCode
 
-        agent = CodeGenAgent()
-        spec = ProjectSpec(
-            descricao_kpis="Queremos análise de sentimento por conversa",
-            dicionario_dados="dummy",
+        gc = GeneratedCode(
+            camada="bronze",
+            codigo="def run(r,w,s): return {}",
+            nome_funcao="run",
+            descricao="test bronze",
         )
-        modulos = agent.recomendar_modulos_gold(spec)
-        assert "sentiment" in modulos
+        assert gc.camada == "bronze"
+        assert gc.codigo
+        assert gc.erro == ""
 
-    def test_recommend_personas_from_kpis(self):
-        from agents.codegen_agent import CodeGenAgent
-        from pipeline.specs import ProjectSpec
+    def test_pipeline_gerado_completo(self):
+        from agents.codegen_agent import GeneratedCode, PipelineGerado
 
-        agent = CodeGenAgent()
-        spec = ProjectSpec(
-            descricao_kpis="Classificação de personas e perfis de leads",
-            dicionario_dados="dummy",
+        pg = PipelineGerado(
+            bronze=GeneratedCode(camada="bronze", codigo="def run(r,w,s): return {}", nome_funcao="run", descricao="b"),
+            silver=GeneratedCode(camada="silver", codigo="def run(r,w,s): return {}", nome_funcao="run", descricao="s"),
+            gold=[GeneratedCode(camada="gold_test", codigo="def run(r,w,s): return {}", nome_funcao="run", descricao="g")],
         )
-        modulos = agent.recomendar_modulos_gold(spec)
-        assert "personas" in modulos
+        assert pg.completo is True
+        assert pg.resumo["bronze"] is True
+        assert pg.resumo["silver"] is True
+        assert pg.resumo["gold_modules"] == 1
 
-    def test_recommend_all_when_generic(self):
-        from agents.codegen_agent import CodeGenAgent
-        from pipeline.specs import ProjectSpec
+    def test_pipeline_gerado_incompleto(self):
+        from agents.codegen_agent import PipelineGerado
 
-        agent = CodeGenAgent()
-        spec = ProjectSpec(
-            descricao_kpis="Gerar insights gerais dos dados",
-            dicionario_dados="dummy",
+        pg = PipelineGerado()
+        assert pg.completo is False
+        assert pg.resumo["bronze"] is False
+
+    def test_salvar_e_carregar_pipeline(self, tmp_path):
+        from agents.codegen_agent import (
+            GeneratedCode, PipelineGerado,
+            salvar_pipeline_gerado, carregar_pipeline_gerado,
+            pipeline_gerado_existe,
         )
-        modulos = agent.recomendar_modulos_gold(spec)
-        # KPIs genéricos → retorna todos os módulos
-        assert len(modulos) == 5
 
-    def test_recommend_vendor_analysis(self):
-        from agents.codegen_agent import CodeGenAgent
-        from pipeline.specs import ProjectSpec
-
-        agent = CodeGenAgent()
-        spec = ProjectSpec(
-            descricao_kpis="Métricas de performance do time de vendas e vendedor",
-            dicionario_dados="dummy",
+        pg = PipelineGerado(
+            bronze=GeneratedCode(camada="bronze", codigo="def run(r,w,s): return {'rows_written': 0}", nome_funcao="run", descricao="bronze"),
+            silver=GeneratedCode(camada="silver", codigo="def run(r,w,s): return {'rows_written': 0}", nome_funcao="run", descricao="silver"),
+            gold=[GeneratedCode(camada="gold_test", codigo="def run(r,w,s): return {'rows_written': 0}", nome_funcao="run", descricao="gold test")],
         )
-        modulos = agent.recomendar_modulos_gold(spec)
-        assert "vendor_analysis" in modulos
 
-    def test_gold_modules_registry(self):
-        from agents.codegen_agent import GOLD_MODULES
+        out_dir = str(tmp_path / "generated")
+        salvar_pipeline_gerado(pg, out_dir)
 
-        assert "sentiment" in GOLD_MODULES
-        assert "personas" in GOLD_MODULES
-        assert "segmentation" in GOLD_MODULES
-        assert "analytics" in GOLD_MODULES
-        assert "vendor_analysis" in GOLD_MODULES
-        for mod in GOLD_MODULES.values():
-            assert "nome" in mod
-            assert "modulo" in mod
-            assert "funcao" in mod
+        assert pipeline_gerado_existe(out_dir)
+
+        loaded = carregar_pipeline_gerado(out_dir)
+        assert loaded is not None
+        assert loaded.bronze is not None
+        assert loaded.bronze.codigo == pg.bronze.codigo
+        assert loaded.silver is not None
+        assert len(loaded.gold) == 1
+
+    def test_pipeline_gerado_nao_existe(self, tmp_path):
+        from agents.codegen_agent import pipeline_gerado_existe
+
+        assert pipeline_gerado_existe(str(tmp_path / "vazio")) is False

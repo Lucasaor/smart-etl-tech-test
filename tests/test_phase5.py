@@ -361,10 +361,16 @@ class TestPipelineAgent:
 
     def test_plan_com_bronze(self):
         from agents.pipeline_agent import plan
+        from agents.codegen_agent import GeneratedCode, PipelineGerado
+
+        pg = PipelineGerado(
+            bronze=GeneratedCode(camada="bronze", codigo="def run(r,w,s): ...", nome_funcao="run", descricao="test"),
+        )
         state = {
             "tabelas_status": {"bronze": {"exists": False}},
             "layers_a_executar": ["bronze"],
             "spec": None,
+            "pipeline_gerado": pg,
         }
         result = plan(state)
         assert "bronze" in result["plano"]["layers"]
@@ -382,10 +388,16 @@ class TestPipelineAgent:
 
     def test_plan_silver_com_bronze_existente(self):
         from agents.pipeline_agent import plan
+        from agents.codegen_agent import GeneratedCode, PipelineGerado
+
+        pg = PipelineGerado(
+            silver=GeneratedCode(camada="silver", codigo="def run(r,w,s): ...", nome_funcao="run", descricao="test"),
+        )
         state = {
             "tabelas_status": {"bronze": {"exists": True}},
             "layers_a_executar": ["silver"],
             "spec": None,
+            "pipeline_gerado": pg,
         }
         result = plan(state)
         assert "silver" in result["plano"]["layers"]
@@ -462,7 +474,7 @@ class TestPipelineAgent:
     def test_route_after_bronze_error(self):
         from agents.pipeline_agent import _route_after_bronze
         state = {"plano": {"layers": ["bronze"]}, "erro": "falha"}
-        assert _route_after_bronze(state) == "complete"
+        assert _route_after_bronze(state) == "try_repair"
 
     def test_route_after_silver_gold(self):
         from agents.pipeline_agent import _route_after_silver
@@ -477,7 +489,7 @@ class TestPipelineAgent:
     def test_route_after_gold_error(self):
         from agents.pipeline_agent import _route_after_gold
         state = {"erro": "falhou"}
-        assert _route_after_gold(state) == "complete"
+        assert _route_after_gold(state) == "try_repair"
 
     def test_create_pipeline_agent(self):
         from agents.pipeline_agent import create_pipeline_agent
@@ -630,7 +642,7 @@ class TestRepairAgent:
         result = _analisar_com_heuristicas(
             "Schema mismatch on column X", "silver", {}
         )
-        assert result["estrategia"] == "retry_from_start"
+        assert result["estrategia"] == "regenerate_code"
 
     def test_heuristicas_permission(self):
         from agents.repair_agent import _analisar_com_heuristicas
@@ -658,7 +670,7 @@ class TestRepairAgent:
     def test_heuristicas_erro_generico(self):
         from agents.repair_agent import _analisar_com_heuristicas
         result = _analisar_com_heuristicas("algo inesperado", "bronze", {})
-        assert result["estrategia"] == "retry"
+        assert result["estrategia"] == "regenerate_code"
 
     def test_analyze_sem_llm(self):
         from agents.repair_agent import analyze
@@ -807,16 +819,35 @@ class TestRepairAgent:
         assert result["reparado"] is False
 
     def test_run_repair_agent_retry_mock(self):
-        """Repair agent com retry mockado bem-sucedido."""
+        """Repair agent com regenerate_code mockado bem-sucedido."""
         from agents.repair_agent import run_repair_agent
         from monitoring.models import PipelineRun, RunStatus
 
         mock_run = PipelineRun(layers=["bronze"], trigger="repair_agent", status=RunStatus.COMPLETED)
 
-        with patch("agents.tools.pipeline_tools.PipelineOrchestrator") as MockOrch:
+        with patch("agents.tools.pipeline_tools.PipelineOrchestrator") as MockOrch, \
+             patch("agents.codegen_agent.CodeGenAgent") as MockCodeGen, \
+             patch("pipeline.specs.carregar_spec") as mock_spec, \
+             patch("pipeline.specs.spec_existe", return_value=True), \
+             patch("agents.codegen_agent.carregar_pipeline_gerado") as mock_pg, \
+             patch("agents.codegen_agent.salvar_pipeline_gerado"):
             mock_instance = MagicMock()
             mock_instance.run_pipeline.return_value = mock_run
             MockOrch.return_value = mock_instance
+
+            # Mock codegen agent regeneração
+            from agents.codegen_agent import GeneratedCode
+            mock_agent = MagicMock()
+            mock_agent.regenerar_camada.return_value = GeneratedCode(
+                camada="bronze", codigo="def run(r,w,s): return {'rows_written': 1}",
+                nome_funcao="run", descricao="regenerated",
+            )
+            MockCodeGen.return_value = mock_agent
+
+            # Mock spec e pipeline_gerado
+            mock_spec.return_value = MagicMock()
+            from agents.codegen_agent import PipelineGerado
+            mock_pg.return_value = PipelineGerado()
 
             result = run_repair_agent(
                 erro="timeout na conexão",

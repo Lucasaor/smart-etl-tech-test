@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import textwrap
 from pathlib import Path
 
 import polars as pl
@@ -260,8 +261,27 @@ class TestOrchestrator:
 
     def test_run_bronze_step(self, sample_parquet, tmp_path, monkeypatch):
         from pipeline.orchestrator import PipelineOrchestrator
+        from agents.codegen_agent import GeneratedCode, PipelineGerado, salvar_pipeline_gerado
 
-        _, temp_store = self._setup_orchestrator(sample_parquet, tmp_path, monkeypatch)
+        s, temp_store = self._setup_orchestrator(sample_parquet, tmp_path, monkeypatch)
+
+        # Fornecer código gerado que executa Bronze de forma simples
+        bronze_code = textwrap.dedent("""\
+            import polars as pl
+
+            def run(read_table, write_table, settings):
+                source = settings["source_path"]
+                df = pl.read_parquet(source)
+                write_table(df, settings["bronze_path"])
+                return {"rows_written": len(df), "status": "ok"}
+        """)
+        pg = PipelineGerado(
+            bronze=GeneratedCode(camada="bronze", codigo=bronze_code, nome_funcao="run", descricao="test bronze"),
+        )
+        generated_dir = str(Path(s.spec_path) / "generated")
+        Path(generated_dir).mkdir(parents=True, exist_ok=True)
+        salvar_pipeline_gerado(pg, generated_dir)
+
         orch = PipelineOrchestrator()
         orch.store = temp_store
         run = orch.run_pipeline(layers=["bronze"])
@@ -274,8 +294,26 @@ class TestOrchestrator:
 
     def test_run_records_to_monitoring(self, sample_parquet, tmp_path, monkeypatch):
         from pipeline.orchestrator import PipelineOrchestrator
+        from agents.codegen_agent import GeneratedCode, PipelineGerado, salvar_pipeline_gerado
 
-        _, temp_store = self._setup_orchestrator(sample_parquet, tmp_path, monkeypatch)
+        s, temp_store = self._setup_orchestrator(sample_parquet, tmp_path, monkeypatch)
+
+        bronze_code = textwrap.dedent("""\
+            import polars as pl
+
+            def run(read_table, write_table, settings):
+                source = settings["source_path"]
+                df = pl.read_parquet(source)
+                write_table(df, settings["bronze_path"])
+                return {"rows_written": len(df), "status": "ok"}
+        """)
+        pg = PipelineGerado(
+            bronze=GeneratedCode(camada="bronze", codigo=bronze_code, nome_funcao="run", descricao="test bronze"),
+        )
+        generated_dir = str(Path(s.spec_path) / "generated")
+        Path(generated_dir).mkdir(parents=True, exist_ok=True)
+        salvar_pipeline_gerado(pg, generated_dir)
+
         orch = PipelineOrchestrator()
         orch.store = temp_store
         run = orch.run_pipeline(layers=["bronze"])
@@ -311,8 +349,9 @@ class TestOrchestrator:
         """O orchestrator usa dados_brutos_path da spec quando disponível."""
         from pipeline.orchestrator import PipelineOrchestrator
         from pipeline.specs import ProjectSpec
+        from agents.codegen_agent import GeneratedCode, PipelineGerado, salvar_pipeline_gerado
 
-        _, temp_store = self._setup_orchestrator(sample_parquet, tmp_path, monkeypatch)
+        s, temp_store = self._setup_orchestrator(sample_parquet, tmp_path, monkeypatch)
 
         spec = ProjectSpec(
             nome="test_spec",
@@ -320,6 +359,22 @@ class TestOrchestrator:
             dicionario_dados="## Test dict",
             descricao_kpis="## Test KPIs",
         )
+
+        bronze_code = textwrap.dedent("""\
+            import polars as pl
+
+            def run(read_table, write_table, settings):
+                source = settings["source_path"]
+                df = pl.read_parquet(source)
+                write_table(df, settings["bronze_path"])
+                return {"rows_written": len(df), "status": "ok"}
+        """)
+        pg = PipelineGerado(
+            bronze=GeneratedCode(camada="bronze", codigo=bronze_code, nome_funcao="run", descricao="test bronze"),
+        )
+        generated_dir = str(Path(s.spec_path) / "generated")
+        Path(generated_dir).mkdir(parents=True, exist_ok=True)
+        salvar_pipeline_gerado(pg, generated_dir)
 
         orch = PipelineOrchestrator(spec=spec)
         orch.store = temp_store

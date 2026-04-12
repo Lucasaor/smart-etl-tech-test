@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     # --- LLM ---
     llm_model: str = "gpt-4o-mini"
     llm_fallback_model: str = "ollama/llama3"
+    llm_codegen_model: str = ""  # Modelo para geração de código; padrão: usa llm_model
+    llm_repair_model: str = ""   # Modelo para reparo/fix de erros; padrão: usa llm_model
     llm_temperature: float = 0.1
     llm_max_cost_per_run: float = 5.0
     llm_batch_size: int = 15

@@ -16,6 +16,7 @@ data/bronze/
 data/silver/
 data/gold/
 data/monitoring/
+data/specs/
 
 # IDE
 .idea/
@@ -31,3 +32,6 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Other
+conversations_bronze.parquet 

@@ -1,16 +1,21 @@
 """Pipeline Monitor — Acompanhamento em tempo real das execuções do pipeline.
 
 Exibe status atual, histórico de runs, timeline visual Bronze→Silver→Gold,
-métricas (rows, tempo, erros) e alertas do sistema.
+métricas (rows, tempo, erros), alertas do sistema e status do código gerado.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import streamlit as st
 
 st.set_page_config(page_title="Pipeline Monitor", page_icon="📊", layout="wide")
+
+from frontend.theme import apply_theme
+apply_theme()
+
 st.title("📊 Pipeline Monitor")
 st.markdown("Acompanhe a execução do pipeline em tempo real e consulte o histórico de runs.")
 
@@ -18,8 +23,79 @@ st.markdown("Acompanhe a execução do pipeline em tempo real e consulte o hist�
 
 from monitoring.models import AlertSeverity, RunStatus
 from monitoring.store import get_monitoring_store
+from pipeline.orchestrator import PipelineOrchestrator
+from pipeline.specs import spec_existe
+from config.settings import get_settings
+from agents.codegen_agent import pipeline_gerado_existe, carregar_pipeline_gerado
 
 store = get_monitoring_store()
+_settings = get_settings()
+
+
+# ─── Status do código gerado ──────────────────────────────────────────────────
+
+_spec_ok = spec_existe(_settings.spec_path)
+_generated_dir = str(Path(_settings.spec_path) / "generated")
+_code_ok = pipeline_gerado_existe(_generated_dir) if _spec_ok else False
+
+st.subheader("Status do Pipeline")
+col_s1, col_s2 = st.columns(2)
+with col_s1:
+    st.metric("Especificação", "✅ Configurada" if _spec_ok else "❌ Pendente")
+with col_s2:
+    st.metric("Código Gerado", "✅ Pronto" if _code_ok else "❌ Pendente")
+
+if _code_ok:
+    with st.expander("📝 Código gerado (visualizar)"):
+        try:
+            pg = carregar_pipeline_gerado(_generated_dir)
+            if pg.bronze and pg.bronze.codigo:
+                st.markdown("**Bronze**")
+                st.code(pg.bronze.codigo, language="python")
+            if pg.silver and pg.silver.codigo:
+                st.markdown("**Silver**")
+                st.code(pg.silver.codigo, language="python")
+            for gm in (pg.gold or []):
+                if gm.codigo:
+                    st.markdown(f"**{gm.camada}**")
+                    st.code(gm.codigo, language="python")
+        except Exception as e:
+            st.warning(f"Não foi possível carregar código gerado: {e}")
+
+st.divider()
+
+# ─── Executar pipeline ─────────────────────────────────────────────────────────
+
+if _spec_ok and _code_ok:
+    # Permitir selecionar camadas
+    col_run1, col_run2 = st.columns([2, 1])
+    with col_run1:
+        camadas_exec = st.multiselect(
+            "Camadas a executar",
+            options=["bronze", "silver", "gold"],
+            default=["bronze", "silver", "gold"],
+            key="pipeline_monitor_layers",
+        )
+    with col_run2:
+        st.write("")  # spacer
+        run_btn = st.button("▶️ Executar Pipeline", type="primary", disabled=not camadas_exec)
+
+    if run_btn and camadas_exec:
+        with st.spinner(f"🚀 Executando pipeline ({', '.join(camadas_exec)})..."):
+            pipeline_run = PipelineOrchestrator().run_pipeline(layers=camadas_exec)
+        if pipeline_run.status.value == "completed":
+            st.success(f"✅ Pipeline concluído em {pipeline_run.duration_sec:.1f}s!")
+        else:
+            erro_msg = next(
+                (s.error_message for s in pipeline_run.steps if s.error_message),
+                "Erro desconhecido",
+            )
+            st.error(f"❌ Pipeline falhou: {erro_msg}")
+        st.rerun()
+elif _spec_ok and not _code_ok:
+    st.warning("Código do pipeline ainda não foi gerado. Vá à página **Configuração** e gere o código primeiro.")
+else:
+    st.info("Nenhuma especificação encontrada. Configure o pipeline na página **Configuração** primeiro.")
 
 
 # ─── Auto-refresh ──────────────────────────────────────────────────────────────
@@ -158,7 +234,7 @@ if runs:
             "Erro": (erro[:80] + "...") if erro and len(erro) > 80 else (erro or "—"),
         })
 
-    st.dataframe(dados_tabela, use_container_width=True, hide_index=True)
+    st.dataframe(dados_tabela, width="stretch", hide_index=True)
 
     # Detalhes expandíveis por run
     with st.expander("Detalhes por Run", expanded=False):
@@ -235,6 +311,6 @@ if alertas:
                 "Resolvido": "✅" if a.resolved else "❌",
                 "Horário": a.timestamp.strftime("%d/%m %H:%M"),
             })
-        st.dataframe(dados_alertas, use_container_width=True, hide_index=True)
+        st.dataframe(dados_alertas, width="stretch", hide_index=True)
 else:
     st.info("Nenhum alerta registrado.")

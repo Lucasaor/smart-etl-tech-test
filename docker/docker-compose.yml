@@ -25,18 +25,9 @@ services:
     ports:
       - "${STREAMLIT_PORT:-8501}:8501"
     volumes:
-      - pipeline-data:/app/data
+      - ../data:/app/data
       - ../Dicionario_de_Dados.md:/app/Dicionario_de_Dados.md:ro
-    environment:
-      - RUNTIME_ENV=local
-      - DATA_ROOT=/app/data
-      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
-      - LLM_FALLBACK_MODEL=${LLM_FALLBACK_MODEL:-ollama/llama3}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - LLM_MAX_COST_PER_RUN=${LLM_MAX_COST_PER_RUN:-5.00}
+      - ../Descricao_KPIs.md:/app/Descricao_KPIs.md:ro
     env_file:
       - ../.env
     restart: unless-stopped
@@ -91,7 +82,5 @@ services:
       "
 
 volumes:
-  pipeline-data:
-    driver: local
   ollama-data:
     driver: local

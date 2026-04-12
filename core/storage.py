@@ -81,6 +81,8 @@ class LocalDeltaBackend(StorageBackend):
         }
         if schema_mode:
             write_kwargs["schema_mode"] = schema_mode
+        elif mode == "overwrite":
+            write_kwargs["schema_mode"] = "overwrite"
 
         write_deltalake(**write_kwargs)
 

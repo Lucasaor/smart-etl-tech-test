@@ -11,6 +11,10 @@ from datetime import datetime, timedelta, timezone
 import streamlit as st
 
 st.set_page_config(page_title="Agent Monitor", page_icon="🤖", layout="wide")
+
+from frontend.theme import apply_theme
+apply_theme()
+
 st.title("🤖 Agent Monitor")
 st.markdown("Monitore as ações dos agentes de IA e acompanhe custos e consumo de tokens.")
 
@@ -144,7 +148,7 @@ if todas_acoes:
             "Horário": a.timestamp.strftime("%d/%m %H:%M:%S"),
         })
 
-    st.dataframe(dados_acoes, use_container_width=True, hide_index=True)
+    st.dataframe(dados_acoes, width="stretch", hide_index=True)
 
     # Detalhes expandíveis
     st.subheader("Detalhes das Ações")
@@ -205,16 +209,20 @@ if todas_acoes:
             y=custos,
             mode="lines+markers",
             name="Custo Acumulado (USD)",
-            line=dict(color="#1f77b4", width=2),
-            marker=dict(size=4),
+            line=dict(color="#31688E", width=2),
+            marker=dict(size=4, color="#35B779"),
         ))
         fig.update_layout(
             title="Evolução do Custo LLM",
             xaxis_title="Tempo",
             yaxis_title="Custo Acumulado (USD)",
             height=350,
+            template="plotly_white",
+            font=dict(family="Inter, sans-serif", size=12),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, key="agent_cost_chart", width="stretch")
 
     except ImportError:
         st.warning("Instale plotly para visualizar o gráfico de custo acumulado.")
