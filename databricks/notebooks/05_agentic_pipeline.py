@@ -31,7 +31,7 @@
 # MAGIC 5. Validate and display results
 # MAGIC
 # MAGIC **Architecture (Databricks Free Edition — Serverless):**
-# MAGIC - Uses `RUNTIME_ENV=local` with `DATA_ROOT=/Volumes/main/default/pipeline_data`
+# MAGIC - Uses `RUNTIME_ENV=local` with `DATA_ROOT` pointing to UC Volume (auto-detected catalog)
 # MAGIC - All I/O goes through `LocalDeltaBackend` (deltalake library) via UC Volume POSIX paths
 # MAGIC - Delta tables written to Volumes are readable by PySpark at the same path
 # MAGIC - Monitoring uses Delta tables (not SQLite) via `force_delta_monitoring`
@@ -69,27 +69,42 @@ import os
 import sys
 from pathlib import Path
 
+# ── Load all config from Databricks Secrets ────────────────────────────────
+# The push_secrets.py script stores .env values (with RUNTIME_ENV="databricks")
+# in the "pipeline" scope. Load them all into env vars.
+SECRET_SCOPE = "pipeline"
+try:
+    for s in dbutils.secrets.list(SECRET_SCOPE):
+        os.environ[s.key] = dbutils.secrets.get(SECRET_SCOPE, s.key)
+    print(f"✅ Loaded {len(dbutils.secrets.list(SECRET_SCOPE))} secrets from scope '{SECRET_SCOPE}'")
+except Exception as e:
+    print(f"⚠️  Could not load secrets from scope '{SECRET_SCOPE}': {e}")
+    print("   Falling back to manual configuration below.")
+
 # ── Runtime Configuration ──────────────────────────────────────────────────
 # Use LocalDeltaBackend (deltalake library) with UC Volume paths.
 # This avoids PySpark for data processing while still writing to Volumes.
 os.environ["RUNTIME_ENV"] = "local"
-os.environ["DATA_ROOT"] = "/Volumes/main/default/pipeline_data"
 os.environ["FORCE_DELTA_MONITORING"] = "true"
 
-# ── LLM API Key ───────────────────────────────────────────────────────────
-# Option A: Set directly (⚠️ don't commit secrets to repos)
-# os.environ["OPENAI_API_KEY"] = "sk-..."
+# Auto-detect Volume path: find the catalog from the current workspace
+try:
+    catalogs = [r.catalog for r in spark.sql("SHOW CATALOGS").collect()]
+    user_catalogs = [c for c in catalogs if c not in ("system", "hive_metastore", "samples") and not c.startswith("__")]
+    CATALOG = user_catalogs[0] if user_catalogs else "main"
+except Exception:
+    CATALOG = "main"
 
-# Option B: Use Databricks secrets (recommended for Free Edition)
-# os.environ["OPENAI_API_KEY"] = dbutils.secrets.get("llm", "openai_api_key")
+VOLUME_ROOT = f"/Volumes/{CATALOG}/default/pipeline_data"
+os.environ["DATA_ROOT"] = VOLUME_ROOT
 
-# Option C: Use Anthropic instead
-# os.environ["ANTHROPIC_API_KEY"] = dbutils.secrets.get("llm", "anthropic_api_key")
-# os.environ["LLM_MODEL"] = "anthropic/claude-sonnet-4-20250514"
-
-# Option D: Use notebook widgets for interactive key entry
+# ── LLM API Key (only needed if secrets were not loaded above) ─────────────
+# Option A: Already loaded from secrets — nothing to do
+# Option B: Set directly (⚠️ don't commit secrets to repos)
+# os.environ["ANTHROPIC_API_KEY"] = "sk-..."
+# Option C: Use notebook widgets for interactive key entry
 # dbutils.widgets.text("llm_api_key", "", "LLM API Key")
-# os.environ["OPENAI_API_KEY"] = dbutils.widgets.get("llm_api_key")
+# os.environ["ANTHROPIC_API_KEY"] = dbutils.widgets.get("llm_api_key")
 
 # ── Repository Path ────────────────────────────────────────────────────────
 repo_path = os.getenv("PROJECT_REPO_PATH", "/Workspace/Repos/agentic-pipeline")
@@ -97,6 +112,7 @@ repo_path = os.getenv("PROJECT_REPO_PATH", "/Workspace/Repos/agentic-pipeline")
 for candidate in [
     repo_path,
     "/Workspace/Repos/Lucasaor/smart-etl-tech-test",
+    "/Workspace/Users/lucas@dharmadatatech.com/smart-etl-tech-test",
     "/Workspace/Repos/agentic-pipeline",
 ]:
     if candidate and Path(candidate, "config", "settings.py").exists():
@@ -106,9 +122,13 @@ for candidate in [
 if repo_path not in sys.path:
     sys.path.insert(0, repo_path)
 
-print(f"Repo path: {repo_path}")
-print(f"DATA_ROOT: {os.environ['DATA_ROOT']}")
-print(f"RUNTIME_ENV: {os.environ['RUNTIME_ENV']}")
+print(f"Repo path:    {repo_path}")
+print(f"Catalog:      {CATALOG}")
+print(f"VOLUME_ROOT:  {VOLUME_ROOT}")
+print(f"DATA_ROOT:    {os.environ['DATA_ROOT']}")
+print(f"RUNTIME_ENV:  {os.environ['RUNTIME_ENV']}")
+print(f"LLM_MODEL:    {os.environ.get('LLM_MODEL', '(not set)')}")
+print(f"API Key set:  {'yes' if os.environ.get('ANTHROPIC_API_KEY') or os.environ.get('OPENAI_API_KEY') else 'NO — set it above'}")
 
 # COMMAND ----------
 
@@ -124,56 +144,60 @@ print(f"RUNTIME_ENV: {os.environ['RUNTIME_ENV']}")
 
 # COMMAND ----------
 
-# Create DBFS directory structure using dbutils.fs (required for serverless)
-# Note: Serverless compute has public DBFS root disabled. 
-# Use Volumes path or FileStore instead.
+# Verify UC Volume directories exist (created by setup_volumes.py)
+# On UC Volumes, directories were created during setup — just verify.
 
-# Update DBFS_ROOT to use a path compatible with serverless
-DBFS_ROOT = "dbfs:/FileStore/delta"  # Use FileStore instead of root DBFS
 SUBDIRS = [
-    "specs", "specs/generated", "specs/generated/tests",
+    "specs", "specs/generated",
     "bronze", "silver", "silver/messages", "silver/conversations",
     "gold", "monitoring",
 ]
 
+print(f"Verifying UC Volume structure at {VOLUME_ROOT}:")
+all_ok = True
 for subdir in SUBDIRS:
-    path = f"{DBFS_ROOT}/{subdir}"
-    try:
-        dbutils.fs.mkdirs(path)
+    path = Path(VOLUME_ROOT) / subdir
+    if path.exists():
         print(f"  ✓ {path}")
-    except Exception as e:
-        print(f"  ✗ {path} - Error: {e}")
+    else:
+        # Try to create it (os.makedirs works on UC Volumes)
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            print(f"  ✓ {path} (created)")
+        except Exception as e:
+            print(f"  ✗ {path} - Error: {e}")
+            all_ok = False
 
-print(f"\nDBFS directories ready at {DBFS_ROOT}/")
-print(f"\n⚠️  Note: Updated DATA_ROOT to use FileStore (compatible with serverless)")
-print("Update Cell 5 to set: os.environ['DATA_ROOT'] = '/dbfs/FileStore/delta'")
+if all_ok:
+    print(f"\n✅ UC Volume structure ready at {VOLUME_ROOT}")
+else:
+    print(f"\n⚠️  Some directories could not be verified. Run setup_volumes.py first.")
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ### Upload Option A: From Databricks UI
 # MAGIC
-# MAGIC 1. Click **Catalog** (left sidebar) → **main** → **default** → **pipeline_data** volume
+# MAGIC 1. Click **Catalog** (left sidebar) → your catalog → **default** → **pipeline_data** volume
 # MAGIC 2. Upload your 3 files to the `specs/` folder
-# MAGIC 3. Or use dbutils.fs.cp from another location
+# MAGIC 3. Or run `python databricks/setup_volumes.py` locally to upload everything
 
 # COMMAND ----------
 
-# Uncomment and adjust paths after uploading via UI:
+# If files were already uploaded by setup_volumes.py, nothing to do here.
+# To upload manually from the UI:
+# 1. Click Catalog → <your-catalog> → default → pipeline_data volume
+# 2. Navigate to the specs/ folder
+# 3. Upload: conversations_bronze.parquet, dicionario_dados.md, descricao_kpis.md
 
-# dbutils.fs.cp(
-#     "dbfs:/FileStore/conversations_bronze.parquet",
-#     f"{VOLUME_ROOT}/specs/conversations_bronze.parquet",
-# )
-# dbutils.fs.cp(
-#     "dbfs:/FileStore/dicionario_dados.md",
-#     f"{VOLUME_ROOT}/specs/dicionario_dados.md",
-# )
-# dbutils.fs.cp(
-#     "dbfs:/FileStore/descricao_kpis.md",
-#     f"{VOLUME_ROOT}/specs/descricao_kpis.md",
-# )
-# print(f"Files copied to {VOLUME_ROOT}/specs/")
+# List current files in specs/:
+try:
+    specs = dbutils.fs.ls(f"{VOLUME_ROOT}/specs/")
+    print(f"Files in {VOLUME_ROOT}/specs/:")
+    for f in specs:
+        print(f"  {f.name} ({f.size / 1024:.1f} KB)")
+except Exception as e:
+    print(f"Could not list specs: {e}")
 
 # COMMAND ----------
 
@@ -468,7 +492,6 @@ for label, path in tables_to_check.items():
 from pyspark.sql import SparkSession
 
 spark = SparkSession.builder.getOrCreate()
-VOLUME_ROOT = "/Volumes/main/default/pipeline_data"
 
 # Bronze
 try:
@@ -522,16 +545,16 @@ except Exception as e:
 # MAGIC 4. **Auto-Repair**: Any failures were automatically diagnosed and repaired by the RepairAgent
 # MAGIC
 # MAGIC ### Accessing results:
-# MAGIC - **PySpark**: `spark.read.format("delta").load("/Volumes/main/default/pipeline_data/bronze")`
-# MAGIC - **deltalake**: `DeltaTable("/Volumes/main/default/pipeline_data/bronze")`
-# MAGIC - **dbutils.fs**: `dbutils.fs.ls("/Volumes/main/default/pipeline_data/")`
+# MAGIC - **PySpark**: `spark.read.format("delta").load(f"{VOLUME_ROOT}/bronze")`
+# MAGIC - **deltalake**: `DeltaTable(f"{VOLUME_ROOT}/bronze")`
+# MAGIC - **dbutils.fs**: `dbutils.fs.ls(f"{VOLUME_ROOT}/")`
 # MAGIC
 # MAGIC ### Re-running:
-# MAGIC - To regenerate code: delete `/Volumes/main/default/pipeline_data/specs/generated/pipeline_meta.json` and re-run from Cell 5
+# MAGIC - To regenerate code: delete `{VOLUME_ROOT}/specs/generated/pipeline_meta.json` and re-run from Cell 5
 # MAGIC - To re-execute with existing code: re-run from Cell 6
-# MAGIC - To use different data: replace files in `/Volumes/main/default/pipeline_data/specs/` and re-run from Cell 4
+# MAGIC - To use different data: replace files in `{VOLUME_ROOT}/specs/` and re-run from Cell 4
 # MAGIC
 # MAGIC ### Cleanup:
 # MAGIC ```python
-# MAGIC dbutils.fs.rm("/Volumes/main/default/pipeline_data/", recurse=True)
+# MAGIC dbutils.fs.rm(f"{VOLUME_ROOT}/", recurse=True)
 # MAGIC ```

@@ -9,7 +9,7 @@
 # MAGIC **Compatível com Databricks Free Edition (serverless compute).**
 # MAGIC
 # MAGIC **Pré-requisitos:**
-# MAGIC - Arquivo de dados brutos em `/Volumes/main/default/pipeline_data/specs/`
+# MAGIC - Arquivo de dados brutos no UC Volume (`/Volumes/<catalog>/default/pipeline_data/specs/`)
 # MAGIC - Executar `setup_volumes.py` antes da primeira execução
 
 # COMMAND ----------

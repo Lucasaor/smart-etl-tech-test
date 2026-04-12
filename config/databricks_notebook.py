@@ -18,7 +18,50 @@ from pathlib import Path
 
 # Default UC Volume path for pipeline data.
 # Format: /Volumes/<catalog>/<schema>/<volume>/<path>
-DEFAULT_VOLUME_ROOT = "/Volumes/main/default/pipeline_data"
+# The catalog is auto-detected at runtime via detect_volume_root().
+_DEFAULT_VOLUME_TEMPLATE = "/Volumes/{catalog}/default/pipeline_data"
+
+
+def detect_volume_root() -> str:
+    """Auto-detect the UC Volume root path by querying available catalogs.
+
+    On Databricks Free Edition the default catalog is often NOT 'main'
+    (e.g. 'workspace'). This function queries Spark SQL to find the right one.
+    Falls back to 'main' if detection fails.
+    """
+    try:
+        # spark is globally available in Databricks notebooks
+        from pyspark.sql import SparkSession
+        spark = SparkSession.builder.getOrCreate()
+        rows = spark.sql("SHOW CATALOGS").collect()
+        catalog_names = [r[0] for r in rows]
+        # Filter out system catalogs
+        user_catalogs = [
+            c for c in catalog_names
+            if c not in ("system", "hive_metastore", "samples") and not c.startswith("__")
+        ]
+        if "main" in user_catalogs:
+            catalog = "main"
+        elif user_catalogs:
+            catalog = user_catalogs[0]
+        else:
+            catalog = "main"
+    except Exception:
+        catalog = "main"
+
+    return _DEFAULT_VOLUME_TEMPLATE.format(catalog=catalog)
+
+
+# Lazy-initialized default; computed on first use by bootstrap_notebook / default_paths
+DEFAULT_VOLUME_ROOT: str | None = None
+
+
+def _get_volume_root() -> str:
+    """Return the volume root, auto-detecting on first call."""
+    global DEFAULT_VOLUME_ROOT
+    if DEFAULT_VOLUME_ROOT is None:
+        DEFAULT_VOLUME_ROOT = detect_volume_root()
+    return DEFAULT_VOLUME_ROOT
 
 
 def detect_repo_path(explicit_repo_path: str | None = None) -> str:
@@ -47,10 +90,10 @@ def bootstrap_notebook(
     """Configure sys.path and environment variables for Databricks execution.
 
     On Databricks Free Edition (serverless), the default data_root points to a
-    Unity Catalog Volume: /Volumes/main/default/pipeline_data.
+    Unity Catalog Volume that is auto-detected from the workspace catalog.
     """
     if data_root is None:
-        data_root = DEFAULT_VOLUME_ROOT
+        data_root = _get_volume_root()
 
     repo_path = detect_repo_path(explicit_repo_path)
 
@@ -72,7 +115,7 @@ def default_paths(data_root: str | None = None) -> dict[str, str]:
     All paths point to Unity Catalog Volumes (POSIX-style paths).
     """
     if data_root is None:
-        data_root = DEFAULT_VOLUME_ROOT
+        data_root = _get_volume_root()
 
     return {
         "specs": f"{data_root}/specs",
@@ -177,7 +220,7 @@ def save_run_metadata(
             monitoring_path = f"{spark_or_path}/monitoring/notebook_runs"
         else:
             spark = spark_or_path
-            monitoring_path = f"{DEFAULT_VOLUME_ROOT}/monitoring/notebook_runs"
+            monitoring_path = f"{_get_volume_root()}/monitoring/notebook_runs"
 
         if spark is not None:
             df = spark.createDataFrame([record])
