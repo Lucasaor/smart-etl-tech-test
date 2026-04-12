@@ -295,7 +295,7 @@ KPI_PATH = f"{spec_dir}/descricao_kpis.md"
 print("Analyzing data sample...")
 analise = analisar_amostra(PARQUET_PATH)
 print(f"  Columns: {len(analise.colunas)}")
-print(f"  Rows: {analise.total_linhas}")
+print(f"  Rows: {analise.num_linhas}")
 print(f"  Columns detected:")
 for col in analise.colunas:
     print(f"    - {col.nome}: {col.tipo} (nulls={col.nulos_pct:.1f}%, uniques={col.valores_unicos})")
