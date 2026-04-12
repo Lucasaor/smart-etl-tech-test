@@ -149,6 +149,8 @@ class DatabricksBackend(StorageBackend):
         writer = spark_df.write.format("delta").mode(mode)
         if schema_mode == "merge":
             writer = writer.option("mergeSchema", "true")
+        elif mode == "overwrite":
+            writer = writer.option("overwriteSchema", "true")
         writer.save(path)
 
     def table_exists(self, path: str) -> bool:
