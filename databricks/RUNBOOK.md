@@ -1,4 +1,4 @@
-# Databricks Community Edition — Runbook Operacional
+# Databricks Free Edition — Runbook Operacional
 
 ## Visão Geral da Arquitetura
 
@@ -18,17 +18,17 @@
 └─────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────┐
-│            DATABRICKS (Community Edition)               │
+│          DATABRICKS (Free Edition — Serverless)         │
 │                                                         │
 │  ┌────────────────────────────────────────────────────┐ │
 │  │  05_agentic_pipeline.py (RECOMMENDED)              │ │
 │  │  ┌───────────┐  ┌──────────┐  ┌────────────────┐   │ │
 │  │  │ CodeGen   │→ │ Executor │→ │ Delta Tables   │   │ │
-│  │  │ Agent     │  │ (Polars) │  │ (DBFS FUSE)    │   │ │
+│  │  │ Agent     │  │ (Polars) │  │ (UC Volumes)   │   │ │
 │  │  │ (LiteLLM) │  │          │  │                │   │ │
 │  │  └───────────┘  └──────────┘  └────────────────┘   │ │
-│  │  RUNTIME_ENV=local | DATA_ROOT=/dbfs/delta         │ │
-│  │  LocalDeltaBackend (deltalake) via FUSE mount      │ │
+│  │  RUNTIME_ENV=local | DATA_ROOT=/Volumes/.../data   │ │
+│  │  LocalDeltaBackend (deltalake) via Volume paths    │ │
 │  └────────────────────────────────────────────────────┘ │
 │                                                         │
 │  ┌────────────────────────────────────────────────────┐ │
@@ -41,39 +41,50 @@
 │  └────┬─────┘ └────┬─────┘ └────┬─────┘                 │
 │       ▼            ▼            ▼                       │
 │  ┌────────────────────────────────────────────────────┐ │
-│  │  Delta Lake DBFS                                   │ │
-│  │  PySpark: /delta/bronze  |  FUSE: /dbfs/delta/...  │ │
-│  │  ├── bronze/    ├── silver/   ├── gold/            │ │
-│  │  ├── specs/     └── monitoring/                    │ │
+│  │  Unity Catalog Volumes                             │ │
+│  │  /Volumes/main/default/pipeline_data/              │ │
+│  │  ├── specs/     ├── bronze/   ├── silver/          │ │
+│  │  ├── gold/      └── monitoring/                    │ │
 │  └────────────────────────────────────────────────────┘ │
+│                                                         │
+│  Compute: Serverless (auto-provisioned, no management)  │
+│  Storage: Unity Catalog Volumes (POSIX paths)           │
+│  Governance: Unity Catalog built-in                     │
 └─────────────────────────────────────────────────────────┘
 ```
 
 ## Pré-requisitos
 
-1. **Conta Databricks Community Edition** ativa em [community.cloud.databricks.com](https://community.cloud.databricks.com)
-2. **Cluster criado** (Community Edition permite 1 cluster)
-3. **Databricks CLI** configurado localmente:
+1. **Conta Databricks Free Edition** ativa em [accounts.cloud.databricks.com](https://accounts.cloud.databricks.com)
+2. **Databricks SDK** configurado localmente:
    ```bash
    pip install databricks-sdk
-   databricks configure --profile DEFAULT
    ```
-4. **Variáveis de ambiente** (ou perfil CLI):
-   - `DATABRICKS_HOST` — URL do workspace (ex: `https://community.cloud.databricks.com`)
+3. **Variáveis de ambiente**:
+   - `DATABRICKS_HOST` — URL do workspace (ex: `https://your-workspace.cloud.databricks.com`)
    - `DATABRICKS_TOKEN` — Token de acesso pessoal
+
+> **Nota:** Não é necessário criar ou gerenciar clusters. A Free Edition usa compute serverless
+> que é provisionado automaticamente quando você executa notebooks ou jobs.
 
 ---
 
 ## Setup Inicial
 
-### 1. Preparar DBFS
+### 1. Preparar UC Volumes
 
 ```bash
-# Criar diretórios + upload de dados e specs
-python databricks/setup_dbfs.py --profile DEFAULT
+# Criar volume + diretórios + upload de dados e specs
+python databricks/setup_volumes.py
 
 # Incluir artefatos gerados (se já existirem)
-python databricks/setup_dbfs.py --profile DEFAULT --include-generated
+python databricks/setup_volumes.py --include-generated
+
+# Usando perfil específico do CLI
+python databricks/setup_volumes.py --profile DEFAULT
+
+# Customizar catálogo/schema/volume
+python databricks/setup_volumes.py --catalog main --schema default --volume pipeline_data
 ```
 
 ### 2. Importar Repo no Workspace
@@ -87,13 +98,62 @@ Opção B — **Upload manual de notebooks**:
 1. Workspace → Import
 2. Importar `databricks/notebooks/*.py` como notebooks Python
 
-### 3. Configurar `PROJECT_REPO_PATH` (se necessário)
+### 3. Configurar LLM API Key
 
-Se o caminho do repo no workspace diferir do padrão, defina no cluster:
-- Cluster → Edit → Spark Config → Environment Variables:
-  ```
-  PROJECT_REPO_PATH=/Workspace/Repos/<seu-usuario>/smart-etl-tech-test
-  ```
+Na Free Edition, **não há variáveis de ambiente de cluster**. Use uma das opções:
+
+**Opção A — Push automático do `.env` (recomendado):**
+
+O script `push_secrets.py` lê o arquivo `.env` local, muda `RUNTIME_ENV` para `"databricks"`,
+e envia todas as variáveis como Databricks Secrets:
+
+```bash
+# Preview do que será enviado (sem alterar nada)
+python databricks/push_secrets.py --dry-run
+
+# Enviar secrets para o scope "pipeline"
+python databricks/push_secrets.py
+
+# Scope customizado
+python databricks/push_secrets.py --scope meu_scope
+
+# Incluir variáveis com valor vazio
+python databricks/push_secrets.py --include-empty
+```
+
+Para carregar os secrets nos notebooks:
+```python
+# Carregar todas as configs do pipeline
+import os
+scope = "pipeline"
+for s in dbutils.secrets.list(scope):
+    os.environ[s.key] = dbutils.secrets.get(scope, s.key)
+```
+
+> **Nota:** `DATABRICKS_HOST` e `DATABRICKS_TOKEN` são automaticamente excluídos
+> (já estão configurados no ambiente). Variáveis com valor vazio são ignoradas por padrão.
+
+**Opção B — Secrets manuais (via CLI):**
+```bash
+# Criar secret scope
+databricks secrets create-scope pipeline
+
+# Adicionar chaves individualmente
+databricks secrets put-secret pipeline ANTHROPIC_API_KEY --string-value "sk-..."
+databricks secrets put-secret pipeline LLM_MODEL --string-value "anthropic/claude-haiku-4-5"
+databricks secrets put-secret pipeline RUNTIME_ENV --string-value "databricks"
+```
+
+**Opção C — Widgets interativos:**
+```python
+dbutils.widgets.text("llm_api_key", "", "LLM API Key")
+os.environ["OPENAI_API_KEY"] = dbutils.widgets.get("llm_api_key")
+```
+
+**Opção D — Diretamente no código (⚠️ não commitar):**
+```python
+os.environ["OPENAI_API_KEY"] = "sk-..."
+```
 
 ---
 
@@ -107,13 +167,13 @@ replicando exatamente o que o Streamlit faz localmente:
 1. Carrega os **mesmos 3 inputs** (parquet, dicionário de dados, descrição KPIs)
 2. Analisa os dados e cria um `ProjectSpec`
 3. Usa o `CodeGenAgent` (LLM) para gerar código Python/Polars dinamicamente
-4. Executa o código gerado → escreve Delta tables em DBFS
+4. Executa o código gerado → escreve Delta tables em UC Volumes
 5. Valida e exibe resultados
 
 **Como funciona:**
 
 ```
-RUNTIME_ENV=local + DATA_ROOT=/dbfs/delta + FORCE_DELTA_MONITORING=true
+RUNTIME_ENV=local + DATA_ROOT=/Volumes/main/default/pipeline_data + FORCE_DELTA_MONITORING=true
 
    ┌─────────────┐    ┌──────────────┐    ┌───────────────┐
    │ LLM (API)   │ ←─ │ CodeGenAgent │ ─→ │ Generated     │
@@ -130,48 +190,49 @@ RUNTIME_ENV=local + DATA_ROOT=/dbfs/delta + FORCE_DELTA_MONITORING=true
                                                    │ deltalake library
                                                    ▼
                                           ┌───────────────┐
-                                          │ DBFS (FUSE)   │
-                                          │ /dbfs/delta/  │
+                                          │ UC Volumes    │
+                                          │ /Volumes/     │
+                                          │   main/       │
+                                          │   default/    │
+                                          │   pipeline_   │
+                                          │   data/       │
                                           │ ├── bronze/   │
                                           │ ├── silver/   │
                                           │ └── gold/     │
                                           └───────────────┘
 ```
 
-- Usa `LocalDeltaBackend` (deltalake library) via FUSE mount `/dbfs/`
+- Usa `LocalDeltaBackend` (deltalake library) via Volume POSIX paths
 - NÃO requer PySpark para o pipeline (apenas para verificação final opcionalmente)
-- Tabelas Delta criadas são acessíveis via PySpark: `spark.read.format("delta").load("/delta/bronze")`
+- Tabelas Delta criadas são acessíveis via PySpark: `spark.read.format("delta").load("/Volumes/main/default/pipeline_data/bronze")`
 - Monitoring usa Delta tables (não SQLite) via `FORCE_DELTA_MONITORING=true`
 
 **Setup:**
 
-1. **LLM API key** — uma das opções:
-   - Cluster Environment Variables: `OPENAI_API_KEY=sk-...`
-   - Databricks Secrets: `dbutils.secrets.get("llm", "openai_api_key")`
-2. **Upload dos 3 arquivos de input** para DBFS (instruções no notebook)
+1. **LLM API key** — via Secrets ou widgets (veja seção acima)
+2. **Upload dos 3 arquivos de input** para UC Volume (instruções no notebook)
 3. **Executar o notebook** célula por célula ou Run All
 
 **Re-execução:**
 
 | Cenário | Ação |
 |---------|------|
-| Regenerar código | Deletar `/dbfs/delta/specs/generated/pipeline_meta.json` e re-executar do Cell 5 |
+| Regenerar código | Deletar `/Volumes/.../specs/generated/pipeline_meta.json` e re-executar do Cell 5 |
 | Re-executar com código existente | Re-executar do Cell 6 |
-| Novos dados | Substituir arquivos em `/dbfs/delta/specs/` e re-executar do Cell 4 |
-| Cleanup total | `dbutils.fs.rm("/delta/", recurse=True)` |
+| Novos dados | Substituir arquivos em `/Volumes/.../specs/` e re-executar do Cell 4 |
+| Cleanup total | `dbutils.fs.rm("/Volumes/main/default/pipeline_data/", recurse=True)` |
 
-### Pipeline PySpark — notebooks 01-04 
+### Pipeline PySpark — notebooks 01-04
 
 Os notebooks 01-04 são uma alternativa PySpark pré-codificada. Útil quando:
 - Não há API key de LLM disponível
-
 - Para debug de camadas individuais
 
 **Execução Completa:**
 
 1. Abrir `04_agent_orchestrator.py` no workspace
-2. Attach ao cluster ativo
-3. **Run All** — executa Bronze → Silver → Gold em sequência
+2. **Run All** — compute serverless será provisionado automaticamente
+3. Executa Bronze → Silver → Gold em sequência
 4. Verificar resumo na célula de resultados
 
 **Execução por Camada (debug/reprocessamento):**
@@ -186,49 +247,60 @@ Cada notebook emite um resultado estruturado JSON via `dbutils.notebook.exit()`.
 
 ---
 
-## Restrições do Community Edition
+## Características da Free Edition
+
+| Característica | Detalhe |
+|----------------|---------|
+| **Compute** | Serverless (auto-provisionado, sem gerenciamento) |
+| **Storage** | Unity Catalog Volumes (paths POSIX: `/Volumes/...`) |
+| **Governance** | Unity Catalog built-in (catálogo `main`, schema `default`) |
+| **Jobs** | Até 5 Jobs concorrentes |
+| **SQL Warehouse** | 1 SQL warehouse (tamanho limitado) |
+| **Notebooks** | Python e SQL |
+| **Bibliotecas** | `%pip install` para instalar pacotes notebook-scoped |
+
+### Restrições da Free Edition
 
 | Restrição | Impacto | Mitigação |
 |-----------|---------|-----------|
-| **Sem Workflows/Jobs** | Impossível agendar execução automática | Execução manual via notebook |
-| **Cluster auto-stop (2h idle)** | Cluster desliga após 2h sem atividade | Reiniciar manualmente antes de executar |
-| **1 cluster por vez** | Sem paralelismo de clusters | Pipeline sequencial já é o design |
-| **Sem Unity Catalog** | Sem governance avançado de tabelas | Usar paths DBFS diretos |
-| **Sem Structured Streaming** | Sem ingestão em tempo real | Pipeline batch-only (compatível) |
+| **Sem clusters custom** | Não é possível definir recursos de compute | Serverless é suficiente para este pipeline |
+| **Sem DBFS direto** | DBFS não acessível; usar Volumes | Todos os paths apontam para `/Volumes/...` |
+| **Sem Spark RDD API** | Apenas Spark Connect (DataFrame API) | Pipeline já usa apenas DataFrame API |
+| **Sem df.cache()/persist()** | Caching não disponível | Datasets são pequenos (~150k rows), sem impacto |
+| **Sem env vars de cluster** | Não há where definir variáveis de ambiente gerais | Usar Secrets ou widgets |
+| **Internet restrita** | Outbound limitado a domínios confiáveis | Pip install funciona; LLM APIs devem ser acessíveis |
+| **Sem R ou Scala** | Apenas Python e SQL | Pipeline já é 100% Python |
+| **UDFs: limite 1GB** | UDFs Python têm limite de memória | UDFs do pipeline são leves (regex, heurísticas) |
 
 ---
 
 ## Troubleshooting
 
-### Cluster parou durante execução
+### Erro "ModuleNotFoundError: No module named 'delta'"
 
-**Sintoma**: Notebook falha com "cluster terminated" ou "connection lost"
+**Contexto**: Na Free Edition (serverless), o pacote `delta` (delta-spark) pode não estar disponível
+da mesma forma que em clusters tradicionais.
 
-**Solução**:
-1. Ir a Compute → selecionar cluster → Start
-2. Aguardar cluster ficar "Running" (2-5 min)
-3. Re-executar o notebook que falhou
-4. Se dados parciais foram escritos, executar do início da camada (modo overwrite limpa dados anteriores)
+**Solução**: Os notebooks 01-04 **não** importam `from delta.tables import DeltaTable`.
+Toda verificação de tabelas é feita via `spark.read.format("delta")` ou SQL `DESCRIBE HISTORY`.
 
-### Erro "No active SparkSession"
+### Erro de path "/Volumes/..."
 
-**Sintoma**: `RuntimeError: No active SparkSession`
-
-**Solução**: O notebook não está attached a um cluster. Clicar em "Attach" no topo do notebook.
-
-### Erro de path "/mnt/delta/..."
-
-**Sintoma**: `FileNotFoundException` ou `AnalysisException` com path DBFS
+**Sintoma**: `FileNotFoundException` ao acessar paths de Volume
 
 **Solução**:
-1. Verificar se `setup_dbfs.py` foi executado com sucesso
-2. Verificar se dados de entrada existem em `/mnt/delta/specs/`:
+1. Verificar se `setup_volumes.py` foi executado com sucesso
+2. Verificar se dados de entrada existem:
    ```python
-   dbutils.fs.ls("/mnt/delta/specs/")
+   dbutils.fs.ls("/Volumes/main/default/pipeline_data/specs/")
    ```
-3. Se necessário, re-executar setup:
-   ```bash
-   python databricks/setup_dbfs.py --profile DEFAULT
+3. Verificar se o volume existe:
+   ```python
+   spark.sql("SHOW VOLUMES IN main.default").show()
+   ```
+4. Se necessário, criar o volume manualmente:
+   ```sql
+   CREATE VOLUME IF NOT EXISTS main.default.pipeline_data
    ```
 
 ### Erro de import "config.*"
@@ -237,8 +309,28 @@ Cada notebook emite um resultado estruturado JSON via `dbutils.notebook.exit()`.
 
 **Solução**:
 1. Verificar se o repo está importado no workspace (Repos)
-2. Verificar `PROJECT_REPO_PATH` no env do cluster
-3. Na célula de bootstrap do notebook, verificar se `repo_path` está correto
+2. Na célula de bootstrap do notebook, verificar se `repo_path` está correto
+3. Definir manualmente se necessário:
+   ```python
+   import sys
+   sys.path.insert(0, "/Workspace/Repos/<seu-usuario>/smart-etl-tech-test")
+   ```
+
+### LLM API key não funciona
+
+**Sintoma**: Erro de autenticação ao chamar LLM no notebook 05
+
+**Solução**:
+1. **Secrets**: Verifique se o scope e a key existem:
+   ```python
+   dbutils.secrets.list("llm")
+   ```
+2. **Outbound**: Verifique se a API do LLM é acessível (Free Edition tem internet restrita):
+   ```python
+   import urllib.request
+   urllib.request.urlopen("https://api.openai.com/v1/models", timeout=5)
+   ```
+3. **Alternativa**: Use modelos que estejam em domínios permitidos, ou tente Anthropic/Google.
 
 ### Dados locais vs Databricks divergem
 
@@ -252,7 +344,7 @@ Cada notebook emite um resultado estruturado JSON via `dbutils.notebook.exit()`.
    ```
 2. No Databricks:
    ```python
-   df = spark.read.format("delta").load("/mnt/delta/bronze")
+   df = spark.read.format("delta").load("/Volumes/main/default/pipeline_data/bronze")
    print(f"Databricks Bronze: {df.count()} rows")
    ```
 3. Comparar row counts e schemas
@@ -262,11 +354,11 @@ Cada notebook emite um resultado estruturado JSON via `dbutils.notebook.exit()`.
 ## Monitoramento
 
 ### No Databricks
-- Cada notebook salva metadados de execução em `/mnt/delta/monitoring/notebook_runs`
+- Cada notebook salva metadados de execução em `/Volumes/.../monitoring/notebook_runs`
 - O orquestrador salva resumo do pipeline completo
 - Verificar via:
   ```python
-  df = spark.read.format("delta").load("/mnt/delta/monitoring/notebook_runs")
+  df = spark.read.format("delta").load("/Volumes/main/default/pipeline_data/monitoring/notebook_runs")
   display(df.orderBy(F.desc("timestamp")))
   ```
 
@@ -292,12 +384,12 @@ docker-compose -f docker/docker-compose.yml up
 
 ### Cenário B: Local UI + Databricks ETL
 1. Gerar specs e código localmente via Streamlit
-2. Sincronizar artefatos para DBFS:
+2. Sincronizar artefatos para UC Volumes:
    ```bash
-   python databricks/setup_dbfs.py --include-generated
+   python databricks/setup_volumes.py --include-generated
    ```
-3. Executar notebooks manualmente no Databricks
-4. Resultados ficam em Delta no DBFS
+3. Executar notebooks no Databricks (serverless)
+4. Resultados ficam em Delta nos Volumes
 
 ### Cenário C: Fallback quando Databricks indisponível
 - Pipeline local funciona independentemente
@@ -306,23 +398,34 @@ docker-compose -f docker/docker-compose.yml up
 
 ---
 
+## Agendamento via Jobs
+
+Na Free Edition, você pode agendar notebooks como Jobs (até 5 concorrentes):
+
+1. **Workflows** → **Create Job**
+2. Selecionar notebook (ex: `04_agent_orchestrator.py`)
+3. Definir schedule (ex: diário às 08:00)
+4. Compute: Serverless (automático)
+
+Isso substitui a limitação do Community Edition que não tinha Workflows/Jobs.
+
+---
+
 ## Checklist de Validação Pós-Setup
 
 ### Pipeline Agêntico (05_agentic_pipeline.py)
-- [ ] Cluster Databricks ativo (status "Running")
 - [ ] Repo importado e visível no workspace
-- [ ] LLM API key configurada (env var ou secrets)
-- [ ] 3 input files presentes em `/dbfs/delta/specs/`
+- [ ] LLM API key configurada (secrets ou widgets)
+- [ ] 3 input files presentes em `/Volumes/main/default/pipeline_data/specs/`
 - [ ] `%pip install` executou sem erros
 - [ ] `CodeGenAgent` gerou código para Bronze, Silver e Gold modules
 - [ ] Pipeline executou com sucesso (todos steps "completed")
-- [ ] Bronze Delta table contém dados (`spark.read.format("delta").load("/delta/bronze")`)
+- [ ] Bronze Delta table contém dados
 - [ ] Silver tables contêm dados
 - [ ] Gold tables contêm dados
-- [ ] `/dbfs/delta/monitoring/` contém registros Delta
 
 ### Pipeline PySpark (01-04, fallback)
-- [ ] `python databricks/setup_dbfs.py --profile DEFAULT` executou sem erros
+- [ ] `python databricks/setup_volumes.py` executou sem erros
 - [ ] `01_bronze.py` executa e mostra row count > 0
 - [ ] `02_silver.py` executa e cria Silver Messages + Conversations
 - [ ] `03_gold.py` executa e cria 5 tabelas Gold

@@ -113,6 +113,9 @@ class DatabricksBackend(StorageBackend):
 
     Requires a SparkSession available (e.g. inside a Databricks notebook).
     Converts Spark DataFrames ↔ Polars for a consistent interface.
+
+    Compatible with Databricks Free Edition (serverless compute / Spark Connect).
+    Uses SQL-based alternatives instead of delta.tables.DeltaTable API.
     """
 
     def _get_spark(self) -> Any:
@@ -149,17 +152,17 @@ class DatabricksBackend(StorageBackend):
         writer.save(path)
 
     def table_exists(self, path: str) -> bool:
-        from delta.tables import DeltaTable as SparkDeltaTable
-
         spark = self._get_spark()
-        return SparkDeltaTable.isDeltaTable(spark, path)
+        try:
+            spark.read.format("delta").load(path).limit(0).collect()
+            return True
+        except Exception:
+            return False
 
     def get_table_version(self, path: str) -> int:
-        from delta.tables import DeltaTable as SparkDeltaTable
-
         spark = self._get_spark()
-        dt = SparkDeltaTable.forPath(spark, path)
-        return int(dt.history(1).select("version").collect()[0][0])
+        hist = spark.sql(f"DESCRIBE HISTORY delta.`{path}` LIMIT 1")
+        return int(hist.select("version").collect()[0][0])
 
     def get_table_row_count(self, path: str) -> int:
         spark = self._get_spark()

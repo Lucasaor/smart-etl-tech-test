@@ -7,6 +7,8 @@
 # MAGIC 2. **Extração**: entidades (CPF, email, telefone, CEP, placa, concorrentes)
 # MAGIC 3. **Agregação**: mensagens → nível conversa (~15k conversas)
 # MAGIC
+# MAGIC **Compatível com Databricks Free Edition (serverless compute).**
+# MAGIC
 # MAGIC **Pré-requisitos:**
 # MAGIC - Tabela Bronze populada (executar notebook 01_bronze)
 
@@ -39,7 +41,6 @@ _nb_start = __import__("time").time()
 from pyspark.sql import SparkSession, Window
 from pyspark.sql import functions as F
 from pyspark.sql.types import StringType, ArrayType
-from delta.tables import DeltaTable
 
 spark = SparkSession.builder.getOrCreate()
 

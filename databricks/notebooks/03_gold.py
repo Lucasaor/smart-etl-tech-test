@@ -9,6 +9,8 @@
 # MAGIC 4. **Analytics**: lead scoring, funil de conversão, métricas de campanha
 # MAGIC 5. **Vendedores**: métricas de performance por vendedor
 # MAGIC
+# MAGIC **Compatível com Databricks Free Edition (serverless compute).**
+# MAGIC
 # MAGIC **Pré-requisitos:**
 # MAGIC - Tabelas Silver populadas (executar notebook 02_silver)
 

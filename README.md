@@ -148,13 +148,15 @@ O sistema **recebe como entrada** uma amostra de dados brutos, um dicionário de
 │   ├── Dockerfile                 # Imagem Python 3.11 + deps
 │   └── docker-compose.yml         # Streamlit + Ollama (opcional)
 │
-└── databricks/                    # Migração Databricks
-    ├── setup_dbfs.py              # Upload de dados para DBFS
+└── databricks/                    # Integração Databricks (Free Edition)
+    ├── setup_volumes.py           # Upload de dados para UC Volumes
+    ├── RUNBOOK.md                 # Guia operacional completo
     └── notebooks/
         ├── 01_bronze.py           # Ingestão (PySpark + Delta)
         ├── 02_silver.py           # Limpeza + Extração + Agregação
         ├── 03_gold.py             # Sentimento, Personas, Segmentação, Analytics, Vendedores
-        └── 04_agent_orchestrator.py  # Orquestração completa + detecção de novos dados
+        ├── 04_agent_orchestrator.py  # Orquestração completa + detecção de novos dados
+        └── 05_agentic_pipeline.py # Pipeline agêntico completo (LLM-driven)
 ```
 
 ## Entradas do Sistema
@@ -258,7 +260,10 @@ Acesse `http://localhost:8501` para o dashboard.
 
 Os dados persistem no volume Docker `pipeline-data`. Configure API keys via `.env`.
 
-## Migração Databricks
+## Integração Databricks (Free Edition)
+
+O pipeline roda na **Databricks Free Edition** usando compute **serverless** e **Unity Catalog Volumes**.
+Não é necessário criar ou gerenciar clusters.
 
 ### Setup inicial
 
@@ -270,11 +275,11 @@ pip install databricks-sdk
 export DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
 export DATABRICKS_TOKEN=dapi...
 
-# Setup completo (dados + specs)
-python databricks/setup_dbfs.py
+# Setup completo (criar volume + upload de dados e specs)
+python databricks/setup_volumes.py
 
 # Opcional: incluir código gerado em data/specs/generated
-python databricks/setup_dbfs.py --include-generated
+python databricks/setup_volumes.py --include-generated
 ```
 
 ### Notebooks
@@ -287,12 +292,17 @@ Importe os notebooks de `databricks/notebooks/` para o Workspace:
 | `02_silver.py` | Silver | Dedup, extração de entidades (UDFs), agregação por conversa |
 | `03_gold.py` | Gold | Sentimento, personas, segmentação, lead scoring, vendedores |
 | `04_agent_orchestrator.py` | Orquestração | Execução sequencial, verificação de saúde, detecção de novos dados |
+| `05_agentic_pipeline.py` | **Agêntico** | Pipeline completo LLM-driven (recomendado) |
 
-### Limitações do Community Edition
+### Arquitetura Serverless
 
-- **Sem Workflows/Jobs**: pipeline "vivo" simulado via execução manual periódica ou `dbutils.notebook.run()`
-- **Cluster auto-termina**: após 2h de inatividade; re-execução necessária
-- **Sem triggers**: monitoramento de novos dados feito manualmente via notebook 04
+- **Compute**: serverless (provisionado automaticamente, sem gerenciamento)
+- **Storage**: Unity Catalog Volumes (`/Volumes/main/default/pipeline_data/`)
+- **Governance**: Unity Catalog built-in
+- **Jobs**: até 5 Jobs agendáveis (substitui a limitação de Workflows do Community Edition)
+- **LLM API keys**: via Databricks Secrets ou notebook widgets (sem env vars de cluster)
+
+Consulte [databricks/RUNBOOK.md](databricks/RUNBOOK.md) para detalhes operacionais completos.
 
 ## Status de Implementação
 
@@ -305,7 +315,7 @@ Importe os notebooks de `databricks/notebooks/` para o Workspace:
 | **5** | Sistema de Agentes (tools, pipeline, monitor, repair) | ✅ Completa |
 | **6** | Frontend Streamlit (configuração + 3 dashboards) | ✅ Completa |
 | **7** | Docker Compose (Streamlit + Ollama opcional) | ✅ Completa |
-| **8** | Migração Databricks (4 notebooks + setup DBFS) | ✅ Completa |
+| **8** | Migração Databricks (5 notebooks + setup UC Volumes) | ✅ Completa |
 
 ## Fase 1 — Fundação
 

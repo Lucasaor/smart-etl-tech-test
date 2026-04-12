@@ -5,14 +5,13 @@
 # MAGIC Notebook responsável pela orquestração dos agentes de IA no Databricks.
 # MAGIC Executa o pipeline completo com monitoramento e auto-correção.
 # MAGIC
+# MAGIC **Compatível com Databricks Free Edition (serverless compute).**
+# MAGIC
 # MAGIC **Modos de execução:**
 # MAGIC - **Manual**: executar célula por célula
-# MAGIC - **Periódico**: chamar via `dbutils.notebook.run()` com parâmetros
+# MAGIC - **Job**: agendar via Databricks Jobs (disponível na Free Edition)
 # MAGIC
-# MAGIC **Limitações do Community Edition:**
-# MAGIC - Sem Workflows/Jobs nativos
-# MAGIC - Cluster auto-termina após 2h de inatividade
-# MAGIC - Pipeline "vivo" simulado via execução periódica manual ou trigger
+# MAGIC **Nota:** Serverless compute é provisionado automaticamente — sem gerenciar clusters.
 
 # COMMAND ----------
 
@@ -182,34 +181,28 @@ TABELAS = {
 print("=== Verificação de Saúde ===\n")
 for nome, path in TABELAS.items():
     try:
-        from delta.tables import DeltaTable
-        if DeltaTable.isDeltaTable(spark, path):
-            df = spark.read.format("delta").load(path)
-            linhas = df.count()
-            colunas = len(df.columns)
-            version = DeltaTable.forPath(spark, path).history(1).select("version").collect()[0][0]
-            print(f"  ✅ {nome}: {linhas:,} linhas, {colunas} colunas (v{version})")
-        else:
-            print(f"  ⚠️  {nome}: tabela não encontrada")
+        df = spark.read.format("delta").load(path)
+        linhas = df.count()
+        colunas = len(df.columns)
+        # Get version via SQL (Spark Connect compatible — no DeltaTable API)
+        hist = spark.sql(f"DESCRIBE HISTORY delta.`{path}` LIMIT 1")
+        version = hist.select("version").collect()[0][0]
+        print(f"  ✅ {nome}: {linhas:,} linhas, {colunas} colunas (v{version})")
     except Exception as e:
-        print(f"  ❌ {nome}: ERRO - {e}")
+        print(f"  ⚠️  {nome}: não encontrada ou erro - {e}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Execução Periódica (Simulação de Pipeline Vivo)
+# MAGIC ## Execução Periódica (via Jobs)
 # MAGIC
-# MAGIC No Databricks Community Edition não há Workflows/Jobs nativos.
-# MAGIC Esta célula pode ser executada manualmente para simular
-# MAGIC a detecção de novos dados e re-execução do pipeline.
+# MAGIC Na Free Edition, você pode agendar este notebook como um Job
+# MAGIC (até 5 Jobs concorrentes). Serverless compute é provisionado automaticamente.
 # MAGIC
-# MAGIC **Para uso automatizado**, chame este notebook via:
-# MAGIC ```python
-# MAGIC dbutils.notebook.run(
-# MAGIC     "/Workspace/Repos/agentic-pipeline/databricks/notebooks/04_agent_orchestrator",
-# MAGIC     timeout_seconds=3600
-# MAGIC )
-# MAGIC ```
+# MAGIC **Para agendar:**
+# MAGIC 1. Workflows → Create Job
+# MAGIC 2. Selecionar este notebook
+# MAGIC 3. Definir schedule (ex: diário)
 
 # COMMAND ----------
 
@@ -218,25 +211,25 @@ for nome, path in TABELAS.items():
 
 # COMMAND ----------
 
-from delta.tables import DeltaTable
-
 def verificar_novos_dados():
     """Verifica se há novos dados na camada Bronze que ainda não foram processados."""
     try:
         bronze_path = paths["bronze"]
         silver_path = paths["silver_messages"]
 
-        if not DeltaTable.isDeltaTable(spark, bronze_path):
+        # Check if Bronze exists (Spark Connect compatible)
+        try:
+            df_bronze = spark.read.format("delta").load(bronze_path)
+            count_bronze = df_bronze.count()
+        except Exception:
             return {"novos_dados": False, "motivo": "Tabela Bronze não existe"}
 
-        df_bronze = spark.read.format("delta").load(bronze_path)
-        count_bronze = df_bronze.count()
-
-        if not DeltaTable.isDeltaTable(spark, silver_path):
+        # Check if Silver exists
+        try:
+            df_silver = spark.read.format("delta").load(silver_path)
+            count_silver = df_silver.count()
+        except Exception:
             return {"novos_dados": True, "motivo": f"Silver vazia, Bronze tem {count_bronze} linhas"}
-
-        df_silver = spark.read.format("delta").load(silver_path)
-        count_silver = df_silver.count()
 
         if count_bronze > count_silver:
             return {

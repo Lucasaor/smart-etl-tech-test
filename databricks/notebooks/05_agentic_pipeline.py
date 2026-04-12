@@ -2,23 +2,24 @@
 # MAGIC %md
 # MAGIC # 05 — Agentic Pipeline: Full LLM-Driven ETL
 # MAGIC
-# MAGIC This notebook runs the **complete agentic pipeline** on Databricks Community Edition.
+# MAGIC This notebook runs the **complete agentic pipeline** on Databricks Free Edition.
 # MAGIC It replicates the same flow that Streamlit runs locally via Docker:
 # MAGIC
 # MAGIC 1. Load input files (parquet data sample, data dictionary, KPI description)
 # MAGIC 2. Analyze the data and create a `ProjectSpec`
 # MAGIC 3. Use `CodeGenAgent` (LLM) to generate Bronze / Silver / Gold ETL code
-# MAGIC 4. Execute the generated code → write Delta tables to DBFS
+# MAGIC 4. Execute the generated code → write Delta tables to UC Volumes
 # MAGIC 5. Validate and display results
 # MAGIC
-# MAGIC **Architecture:**
-# MAGIC - Uses `RUNTIME_ENV=local` with `DATA_ROOT=/dbfs/delta` (FUSE mount)
-# MAGIC - All I/O goes through `LocalDeltaBackend` (deltalake library) via DBFS FUSE
-# MAGIC - Delta tables written to `/dbfs/delta/...` are readable by PySpark at `/delta/...`
+# MAGIC **Architecture (Databricks Free Edition — Serverless):**
+# MAGIC - Uses `RUNTIME_ENV=local` with `DATA_ROOT=/Volumes/main/default/pipeline_data`
+# MAGIC - All I/O goes through `LocalDeltaBackend` (deltalake library) via UC Volume POSIX paths
+# MAGIC - Delta tables written to Volumes are readable by PySpark at the same path
 # MAGIC - Monitoring uses Delta tables (not SQLite) via `force_delta_monitoring`
+# MAGIC - Serverless compute is provisioned automatically — no cluster management needed
 # MAGIC
 # MAGIC **Prerequisites:**
-# MAGIC 1. Upload your data files to DBFS (see Cell 3 below)
+# MAGIC 1. Upload your data files to UC Volume (see Cell 3 below)
 # MAGIC 2. Set your LLM API key (see Cell 2 below)
 # MAGIC 3. Clone this repository to Databricks Repos
 
@@ -50,26 +51,26 @@ import sys
 from pathlib import Path
 
 # ── Runtime Configuration ──────────────────────────────────────────────────
-# Use LocalDeltaBackend (deltalake library) with DBFS FUSE paths.
-# This avoids PySpark for data processing while still writing to DBFS.
+# Use LocalDeltaBackend (deltalake library) with UC Volume paths.
+# This avoids PySpark for data processing while still writing to Volumes.
 os.environ["RUNTIME_ENV"] = "local"
-os.environ["DATA_ROOT"] = "/dbfs/delta"
+os.environ["DATA_ROOT"] = "/Volumes/main/default/pipeline_data"
 os.environ["FORCE_DELTA_MONITORING"] = "true"
 
 # ── LLM API Key ───────────────────────────────────────────────────────────
 # Option A: Set directly (⚠️ don't commit secrets to repos)
 # os.environ["OPENAI_API_KEY"] = "sk-..."
 
-# Option B: Use Databricks secrets (recommended)
+# Option B: Use Databricks secrets (recommended for Free Edition)
 # os.environ["OPENAI_API_KEY"] = dbutils.secrets.get("llm", "openai_api_key")
 
 # Option C: Use Anthropic instead
 # os.environ["ANTHROPIC_API_KEY"] = dbutils.secrets.get("llm", "anthropic_api_key")
 # os.environ["LLM_MODEL"] = "anthropic/claude-sonnet-4-20250514"
 
-# Option D: Set via cluster environment variables (most secure — nothing in code)
-# → Cluster > Edit > Advanced > Spark > Environment Variables:
-#   OPENAI_API_KEY=sk-...
+# Option D: Use notebook widgets for interactive key entry
+# dbutils.widgets.text("llm_api_key", "", "LLM API Key")
+# os.environ["OPENAI_API_KEY"] = dbutils.widgets.get("llm_api_key")
 
 # ── Repository Path ────────────────────────────────────────────────────────
 repo_path = os.getenv("PROJECT_REPO_PATH", "/Workspace/Repos/agentic-pipeline")
@@ -93,9 +94,9 @@ print(f"RUNTIME_ENV: {os.environ['RUNTIME_ENV']}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 3. Prepare DBFS Directories & Upload Input Files
+# MAGIC ## 3. Prepare UC Volume Directories & Upload Input Files
 # MAGIC
-# MAGIC Create the required directory structure on DBFS and upload your input data.
+# MAGIC Create the required directory structure on UC Volumes and upload your input data.
 # MAGIC
 # MAGIC **You need 3 input files:**
 # MAGIC - `conversations_bronze.parquet` — raw CRM data sample
@@ -104,8 +105,8 @@ print(f"RUNTIME_ENV: {os.environ['RUNTIME_ENV']}")
 
 # COMMAND ----------
 
-# Create DBFS directory structure
-DBFS_ROOT = "/dbfs/delta"
+# Create UC Volume directory structure
+VOLUME_ROOT = "/Volumes/main/default/pipeline_data"
 SUBDIRS = [
     "specs", "specs/generated", "specs/generated/tests",
     "bronze", "silver", "silver/messages", "silver/conversations",
@@ -113,19 +114,19 @@ SUBDIRS = [
 ]
 
 for subdir in SUBDIRS:
-    Path(f"{DBFS_ROOT}/{subdir}").mkdir(parents=True, exist_ok=True)
-    print(f"  ✓ {DBFS_ROOT}/{subdir}")
+    Path(f"{VOLUME_ROOT}/{subdir}").mkdir(parents=True, exist_ok=True)
+    print(f"  ✓ {VOLUME_ROOT}/{subdir}")
 
-print(f"\nDBFS directories ready at {DBFS_ROOT}/")
+print(f"\nUC Volume directories ready at {VOLUME_ROOT}/")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Upload Option A: From Databricks FileStore (UI Upload)
+# MAGIC ### Upload Option A: From Databricks UI
 # MAGIC
-# MAGIC 1. Click **Data** (left sidebar) → **DBFS** → **FileStore** → **Upload**
-# MAGIC 2. Upload your 3 files
-# MAGIC 3. Run the cell below to copy them to the working directory
+# MAGIC 1. Click **Catalog** (left sidebar) → **main** → **default** → **pipeline_data** volume
+# MAGIC 2. Upload your 3 files to the `specs/` folder
+# MAGIC 3. Or use dbutils.fs.cp from another location
 
 # COMMAND ----------
 
@@ -133,17 +134,17 @@ print(f"\nDBFS directories ready at {DBFS_ROOT}/")
 
 # dbutils.fs.cp(
 #     "dbfs:/FileStore/conversations_bronze.parquet",
-#     "dbfs:/delta/specs/conversations_bronze.parquet",
+#     f"{VOLUME_ROOT}/specs/conversations_bronze.parquet",
 # )
 # dbutils.fs.cp(
 #     "dbfs:/FileStore/dicionario_dados.md",
-#     "dbfs:/delta/specs/dicionario_dados.md",
+#     f"{VOLUME_ROOT}/specs/dicionario_dados.md",
 # )
 # dbutils.fs.cp(
 #     "dbfs:/FileStore/descricao_kpis.md",
-#     "dbfs:/delta/specs/descricao_kpis.md",
+#     f"{VOLUME_ROOT}/specs/descricao_kpis.md",
 # )
-# print("Files copied to /dbfs/delta/specs/")
+# print(f"Files copied to {VOLUME_ROOT}/specs/")
 
 # COMMAND ----------
 
@@ -156,8 +157,8 @@ print(f"\nDBFS directories ready at {DBFS_ROOT}/")
 
 import shutil
 
-# Copy from repository to DBFS working directory
-SPEC_DIR = f"{DBFS_ROOT}/specs"
+# Copy from repository to UC Volume working directory
+SPEC_DIR = f"{VOLUME_ROOT}/specs"
 repo = Path(repo_path)
 
 files_to_copy = {
@@ -195,7 +196,7 @@ for target_name, candidates in files_to_copy.items():
 
 # COMMAND ----------
 
-SPEC_DIR = f"{DBFS_ROOT}/specs"
+SPEC_DIR = f"{VOLUME_ROOT}/specs"
 required_files = [
     "conversations_bronze.parquet",
     "dicionario_dados.md",
@@ -297,7 +298,7 @@ pipeline_gerado = agent.gerar_pipeline_completo(spec)
 
 # COMMAND ----------
 
-# Save generated code to DBFS
+# Save generated code to UC Volume
 generated_dir = str(Path(spec_dir) / "generated")
 file_paths = salvar_pipeline_gerado(pipeline_gerado, generated_dir)
 
@@ -356,7 +357,7 @@ for gold in pipeline_gerado.gold:
 # MAGIC
 # MAGIC Run the generated code through the `PipelineOrchestrator`.
 # MAGIC This executes Bronze → Silver → Gold sequentially, writing Delta tables
-# MAGIC to DBFS. Failures trigger the `RepairAgent` for automatic recovery.
+# MAGIC to UC Volumes. Failures trigger the `RepairAgent` for automatic recovery.
 
 # COMMAND ----------
 
@@ -430,18 +431,19 @@ for label, path in tables_to_check.items():
 # MAGIC %md
 # MAGIC ## 8. Preview Data with PySpark
 # MAGIC
-# MAGIC The Delta tables written by the `deltalake` library to `/dbfs/delta/...`
-# MAGIC are readable by PySpark at `/delta/...` (without the `/dbfs` prefix).
+# MAGIC The Delta tables written by the `deltalake` library to UC Volumes
+# MAGIC are readable by PySpark at the same path.
 
 # COMMAND ----------
 
 from pyspark.sql import SparkSession
 
 spark = SparkSession.builder.getOrCreate()
+VOLUME_ROOT = "/Volumes/main/default/pipeline_data"
 
 # Bronze
 try:
-    df_bronze = spark.read.format("delta").load("/delta/bronze")
+    df_bronze = spark.read.format("delta").load(f"{VOLUME_ROOT}/bronze")
     print(f"=== Bronze: {df_bronze.count()} rows ===")
     df_bronze.show(5, truncate=40)
 except Exception as e:
@@ -451,7 +453,7 @@ except Exception as e:
 
 # Silver Conversations
 try:
-    df_silver = spark.read.format("delta").load("/delta/silver/conversations")
+    df_silver = spark.read.format("delta").load(f"{VOLUME_ROOT}/silver/conversations")
     print(f"=== Silver Conversations: {df_silver.count()} rows ===")
     df_silver.show(5, truncate=40)
 except Exception as e:
@@ -462,10 +464,10 @@ except Exception as e:
 # Gold tables
 import os as _os
 
-gold_dir = "/delta/gold"
+gold_dir = f"{VOLUME_ROOT}/gold"
 try:
     gold_tables = [
-        item.name for item in _os.scandir("/dbfs/delta/gold")
+        item.name for item in _os.scandir(gold_dir)
         if item.is_dir() and not item.name.startswith((".", "_"))
     ]
     for table_name in sorted(gold_tables):
@@ -487,20 +489,20 @@ except Exception as e:
 # MAGIC ### What happened:
 # MAGIC 1. **Spec Analysis**: The data sample was analyzed (column types, nulls, uniques)
 # MAGIC 2. **Code Generation**: The LLM generated ETL code for Bronze/Silver/Gold layers
-# MAGIC 3. **Execution**: Generated code was executed, writing Delta tables to DBFS
+# MAGIC 3. **Execution**: Generated code was executed, writing Delta tables to UC Volumes
 # MAGIC 4. **Auto-Repair**: Any failures were automatically diagnosed and repaired by the RepairAgent
 # MAGIC
 # MAGIC ### Accessing results:
-# MAGIC - **PySpark**: `spark.read.format("delta").load("/delta/bronze")`
-# MAGIC - **deltalake**: `DeltaTable("/dbfs/delta/bronze")`
-# MAGIC - **DBFS CLI**: `dbutils.fs.ls("/delta/")`
+# MAGIC - **PySpark**: `spark.read.format("delta").load("/Volumes/main/default/pipeline_data/bronze")`
+# MAGIC - **deltalake**: `DeltaTable("/Volumes/main/default/pipeline_data/bronze")`
+# MAGIC - **dbutils.fs**: `dbutils.fs.ls("/Volumes/main/default/pipeline_data/")`
 # MAGIC
 # MAGIC ### Re-running:
-# MAGIC - To regenerate code: delete `/dbfs/delta/specs/generated/pipeline_meta.json` and re-run from Cell 5
+# MAGIC - To regenerate code: delete `/Volumes/main/default/pipeline_data/specs/generated/pipeline_meta.json` and re-run from Cell 5
 # MAGIC - To re-execute with existing code: re-run from Cell 6
-# MAGIC - To use different data: replace files in `/dbfs/delta/specs/` and re-run from Cell 4
+# MAGIC - To use different data: replace files in `/Volumes/main/default/pipeline_data/specs/` and re-run from Cell 4
 # MAGIC
 # MAGIC ### Cleanup:
 # MAGIC ```python
-# MAGIC dbutils.fs.rm("/delta/", recurse=True)
+# MAGIC dbutils.fs.rm("/Volumes/main/default/pipeline_data/", recurse=True)
 # MAGIC ```

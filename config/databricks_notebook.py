@@ -2,6 +2,9 @@
 
 Placed under `config` to avoid module-name conflicts with the external
 `databricks` SDK package.
+
+Compatible with Databricks Free Edition (serverless compute, Unity Catalog
+Volumes). All paths use UC Volumes instead of DBFS.
 """
 
 from __future__ import annotations
@@ -12,6 +15,10 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Default UC Volume path for pipeline data.
+# Format: /Volumes/<catalog>/<schema>/<volume>/<path>
+DEFAULT_VOLUME_ROOT = "/Volumes/main/default/pipeline_data"
 
 
 def detect_repo_path(explicit_repo_path: str | None = None) -> str:
@@ -35,9 +42,16 @@ def detect_repo_path(explicit_repo_path: str | None = None) -> str:
 
 def bootstrap_notebook(
     explicit_repo_path: str | None = None,
-    data_root: str = "/mnt/delta",
+    data_root: str | None = None,
 ) -> dict[str, str]:
-    """Configure sys.path and environment variables for Databricks execution."""
+    """Configure sys.path and environment variables for Databricks execution.
+
+    On Databricks Free Edition (serverless), the default data_root points to a
+    Unity Catalog Volume: /Volumes/main/default/pipeline_data.
+    """
+    if data_root is None:
+        data_root = DEFAULT_VOLUME_ROOT
+
     repo_path = detect_repo_path(explicit_repo_path)
 
     if repo_path not in sys.path and Path(repo_path).exists():
@@ -52,8 +66,14 @@ def bootstrap_notebook(
     }
 
 
-def default_paths(data_root: str = "/mnt/delta") -> dict[str, str]:
-    """Return canonical layer paths for Databricks notebooks."""
+def default_paths(data_root: str | None = None) -> dict[str, str]:
+    """Return canonical layer paths for Databricks notebooks.
+
+    All paths point to Unity Catalog Volumes (POSIX-style paths).
+    """
+    if data_root is None:
+        data_root = DEFAULT_VOLUME_ROOT
+
     return {
         "specs": f"{data_root}/specs",
         "bronze": f"{data_root}/bronze",
@@ -96,7 +116,7 @@ def make_notebook_result(
 
         dbutils.notebook.exit(make_notebook_result(
             "01_bronze", rows_written=150347,
-            tables_written=["/mnt/delta/bronze"],
+            tables_written=["/Volumes/main/default/pipeline_data/bronze"],
         ))
     """
     payload: dict = {
@@ -157,7 +177,7 @@ def save_run_metadata(
             monitoring_path = f"{spark_or_path}/monitoring/notebook_runs"
         else:
             spark = spark_or_path
-            monitoring_path = "/mnt/delta/monitoring/notebook_runs"
+            monitoring_path = f"{DEFAULT_VOLUME_ROOT}/monitoring/notebook_runs"
 
         if spark is not None:
             df = spark.createDataFrame([record])

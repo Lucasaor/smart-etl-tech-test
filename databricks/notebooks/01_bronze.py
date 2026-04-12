@@ -3,12 +3,14 @@
 # MAGIC # 01 — Camada Bronze: Ingestão de Dados Brutos
 # MAGIC
 # MAGIC Notebook responsável pela ingestão dos dados brutos para a camada Bronze.
-# MAGIC Lê arquivos Parquet do DBFS, valida o schema conforme o dicionário de dados,
+# MAGIC Lê arquivos Parquet de UC Volumes, valida o schema conforme o dicionário de dados,
 # MAGIC expande colunas JSON e escreve como tabela Delta.
 # MAGIC
+# MAGIC **Compatível com Databricks Free Edition (serverless compute).**
+# MAGIC
 # MAGIC **Pré-requisitos:**
-# MAGIC - Arquivo de dados brutos em `/mnt/delta/specs/` ou DBFS
-# MAGIC - Executar `setup_dbfs.py` antes da primeira execução
+# MAGIC - Arquivo de dados brutos em `/Volumes/main/default/pipeline_data/specs/`
+# MAGIC - Executar `setup_volumes.py` antes da primeira execução
 
 # COMMAND ----------
 
@@ -45,11 +47,10 @@ from pyspark.sql.types import (
     StructType, StructField, StringType, IntegerType,
     TimestampType, BooleanType,
 )
-from delta.tables import DeltaTable
 
 spark = SparkSession.builder.getOrCreate()
 
-# Paths
+# Paths (UC Volumes)
 BRONZE_SOURCE = f"{paths['specs']}/conversations_bronze.parquet"
 BRONZE_OUTPUT = paths["bronze"]
 
@@ -127,10 +128,16 @@ df_final = (
     .withColumn("_source_file", lit(BRONZE_SOURCE))
 )
 
-# Modo de escrita: overwrite na primeira vez, merge/append nas seguintes
-if DeltaTable.isDeltaTable(spark, BRONZE_OUTPUT):
+# Check if Bronze table already exists (Spark Connect compatible — no DeltaTable API)
+_bronze_exists = False
+try:
+    _existing = spark.read.format("delta").load(BRONZE_OUTPUT)
+    _bronze_exists = True
+except Exception:
+    _bronze_exists = False
+
+if _bronze_exists:
     print("Tabela Bronze existente detectada — modo incremental (append)")
-    # Append apenas registros novos (por message_id)
     existing = spark.read.format("delta").load(BRONZE_OUTPUT)
     existing_ids = existing.select("message_id").distinct()
     df_novos = df_final.join(existing_ids, on="message_id", how="left_anti")
@@ -158,9 +165,8 @@ _row_count = df_bronze.count()
 print(f"Tabela Bronze: {_row_count} linhas, {len(df_bronze.columns)} colunas")
 display(df_bronze.limit(5))
 
-# Histórico Delta
-history = DeltaTable.forPath(spark, BRONZE_OUTPUT).history()
-display(history.select("version", "timestamp", "operation", "operationMetrics"))
+# Delta history via SQL (Spark Connect compatible)
+spark.sql(f"DESCRIBE HISTORY delta.`{BRONZE_OUTPUT}`").select("version", "timestamp", "operation", "operationMetrics").show(truncate=False)
 
 # Structured result for orchestrator
 import time as _time
