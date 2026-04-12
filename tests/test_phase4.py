@@ -159,7 +159,7 @@ class TestSettingsGoldPaths:
         from config.settings import Settings
 
         monkeypatch.delenv("RUNTIME_ENV", raising=False)
-        s = Settings(runtime_env="databricks")
+        s = Settings(runtime_env="databricks", data_root="/mnt/delta")
         assert s.gold_sentiment_path == "/mnt/delta/gold/sentiment"
         assert s.gold_vendor_path == "/mnt/delta/gold/vendor_analysis"
 

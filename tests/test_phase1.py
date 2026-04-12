@@ -31,7 +31,7 @@ class TestSettings:
     def test_derived_paths_databricks(self):
         from config.settings import Settings
 
-        s = Settings(runtime_env="databricks")
+        s = Settings(runtime_env="databricks", data_root="/mnt/delta")
         assert s.bronze_path == "/mnt/delta/bronze"
         assert s.is_databricks is True
 
@@ -272,7 +272,7 @@ class TestSettings_SpecPath:
     def test_spec_path_databricks(self):
         from config.settings import Settings
 
-        s = Settings(runtime_env="databricks")
+        s = Settings(runtime_env="databricks", data_root="/mnt/delta")
         assert s.spec_path == "/mnt/delta/specs"
 
 

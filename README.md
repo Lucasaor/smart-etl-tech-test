@@ -270,8 +270,11 @@ pip install databricks-sdk
 export DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
 export DATABRICKS_TOKEN=dapi...
 
-# Upload de dados para DBFS
-python databricks/setup_dbfs.py --source ./conversations_bronze.parquet
+# Setup completo (dados + specs)
+python databricks/setup_dbfs.py
+
+# Opcional: incluir código gerado em data/specs/generated
+python databricks/setup_dbfs.py --include-generated
 ```
 
 ### Notebooks

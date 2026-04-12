@@ -22,12 +22,17 @@
 import os
 import sys
 
-repo_path = "/Workspace/Repos/agentic-pipeline"
+repo_path = os.getenv("PROJECT_REPO_PATH", "/Workspace/Repos/agentic-pipeline")
 if os.path.exists(repo_path):
     sys.path.insert(0, repo_path)
 
-os.environ["RUNTIME_ENV"] = "databricks"
-os.environ["DATA_ROOT"] = "/mnt/delta"
+from config.databricks_notebook import (
+    bootstrap_notebook, default_paths, make_notebook_result, save_run_metadata,
+)
+
+boot = bootstrap_notebook(explicit_repo_path=repo_path)
+paths = default_paths(boot["data_root"])
+_nb_start = __import__("time").time()
 
 # COMMAND ----------
 
@@ -38,12 +43,12 @@ from pyspark.sql.types import StringType, DoubleType
 spark = SparkSession.builder.getOrCreate()
 
 # Paths
-SILVER_CONVERSATIONS = "/mnt/delta/silver/conversations"
-GOLD_SENTIMENT = "/mnt/delta/gold/sentiment"
-GOLD_PERSONAS = "/mnt/delta/gold/personas"
-GOLD_SEGMENTATION = "/mnt/delta/gold/segmentation"
-GOLD_ANALYTICS = "/mnt/delta/gold/analytics"
-GOLD_VENDOR = "/mnt/delta/gold/vendor_analysis"
+SILVER_CONVERSATIONS = paths["silver_conversations"]
+GOLD_SENTIMENT = paths["gold_sentiment"]
+GOLD_PERSONAS = paths["gold_personas"]
+GOLD_SEGMENTATION = paths["gold_segmentation"]
+GOLD_ANALYTICS = paths["gold_analytics"]
+GOLD_VENDOR = paths["gold_vendor_analysis"]
 
 # COMMAND ----------
 
@@ -442,6 +447,7 @@ display(df_vendor.orderBy(F.desc("score_vendedor")))
 # COMMAND ----------
 
 print("=== Resumo das Tabelas Gold ===")
+_gold_total_rows = 0
 for nome, path in [
     ("Sentimento", GOLD_SENTIMENT),
     ("Personas", GOLD_PERSONAS),
@@ -451,6 +457,17 @@ for nome, path in [
 ]:
     try:
         df = spark.read.format("delta").load(path)
-        print(f"  {nome}: {df.count()} linhas, {len(df.columns)} colunas")
+        _cnt = df.count()
+        _gold_total_rows += _cnt
+        print(f"  {nome}: {_cnt} linhas, {len(df.columns)} colunas")
     except Exception as e:
         print(f"  {nome}: ERRO - {e}")
+
+# Structured result for orchestrator
+import time as _time
+_nb_duration = _time.time() - _nb_start
+save_run_metadata(boot["data_root"], "03_gold", "sucesso", _nb_duration, rows_written=_gold_total_rows)
+dbutils.notebook.exit(make_notebook_result(
+    "03_gold", rows_written=_gold_total_rows,
+    tables_written=[GOLD_SENTIMENT, GOLD_PERSONAS, GOLD_SEGMENTATION, GOLD_ANALYTICS, GOLD_VENDOR],
+))

@@ -20,15 +20,17 @@
 import os
 import sys
 
-# Adicionar o repositório ao path para importar módulos do projeto
-# Ajuste o caminho conforme necessário no seu workspace
-repo_path = "/Workspace/Repos/agentic-pipeline"
+repo_path = os.getenv("PROJECT_REPO_PATH", "/Workspace/Repos/agentic-pipeline")
 if os.path.exists(repo_path):
     sys.path.insert(0, repo_path)
 
-# Configurar variáveis de ambiente para modo Databricks
-os.environ["RUNTIME_ENV"] = "databricks"
-os.environ["DATA_ROOT"] = "/mnt/delta"
+from config.databricks_notebook import (
+    bootstrap_notebook, default_paths, make_notebook_result, save_run_metadata,
+)
+
+boot = bootstrap_notebook(explicit_repo_path=repo_path)
+paths = default_paths(boot["data_root"])
+_nb_start = __import__("time").time()
 
 # COMMAND ----------
 
@@ -48,8 +50,8 @@ from delta.tables import DeltaTable
 spark = SparkSession.builder.getOrCreate()
 
 # Paths
-BRONZE_SOURCE = "/mnt/delta/specs/conversations_bronze.parquet"
-BRONZE_OUTPUT = "/mnt/delta/bronze"
+BRONZE_SOURCE = f"{paths['specs']}/conversations_bronze.parquet"
+BRONZE_OUTPUT = paths["bronze"]
 
 # COMMAND ----------
 
@@ -152,9 +154,19 @@ else:
 # COMMAND ----------
 
 df_bronze = spark.read.format("delta").load(BRONZE_OUTPUT)
-print(f"Tabela Bronze: {df_bronze.count()} linhas, {len(df_bronze.columns)} colunas")
+_row_count = df_bronze.count()
+print(f"Tabela Bronze: {_row_count} linhas, {len(df_bronze.columns)} colunas")
 display(df_bronze.limit(5))
 
 # Histórico Delta
 history = DeltaTable.forPath(spark, BRONZE_OUTPUT).history()
 display(history.select("version", "timestamp", "operation", "operationMetrics"))
+
+# Structured result for orchestrator
+import time as _time
+_nb_duration = _time.time() - _nb_start
+save_run_metadata(boot["data_root"], "01_bronze", "sucesso", _nb_duration, rows_written=_row_count)
+dbutils.notebook.exit(make_notebook_result(
+    "01_bronze", rows_written=_row_count,
+    tables_written=[BRONZE_OUTPUT],
+))

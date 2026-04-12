@@ -22,12 +22,17 @@ import sys
 import re
 import hashlib
 
-repo_path = "/Workspace/Repos/agentic-pipeline"
+repo_path = os.getenv("PROJECT_REPO_PATH", "/Workspace/Repos/agentic-pipeline")
 if os.path.exists(repo_path):
     sys.path.insert(0, repo_path)
 
-os.environ["RUNTIME_ENV"] = "databricks"
-os.environ["DATA_ROOT"] = "/mnt/delta"
+from config.databricks_notebook import (
+    bootstrap_notebook, default_paths, make_notebook_result, save_run_metadata,
+)
+
+boot = bootstrap_notebook(explicit_repo_path=repo_path)
+paths = default_paths(boot["data_root"])
+_nb_start = __import__("time").time()
 
 # COMMAND ----------
 
@@ -39,9 +44,9 @@ from delta.tables import DeltaTable
 spark = SparkSession.builder.getOrCreate()
 
 # Paths
-BRONZE_PATH = "/mnt/delta/bronze"
-SILVER_MESSAGES_PATH = "/mnt/delta/silver/messages"
-SILVER_CONVERSATIONS_PATH = "/mnt/delta/silver/conversations"
+BRONZE_PATH = paths["bronze"]
+SILVER_MESSAGES_PATH = paths["silver_messages"]
+SILVER_CONVERSATIONS_PATH = paths["silver_conversations"]
 
 # COMMAND ----------
 
@@ -300,7 +305,8 @@ print(f"Silver Conversations: {df_conversations.count()} conversas escritas em {
 # COMMAND ----------
 
 df_silver_check = spark.read.format("delta").load(SILVER_CONVERSATIONS_PATH)
-print(f"Silver Conversations: {df_silver_check.count()} conversas, {len(df_silver_check.columns)} colunas")
+_conv_count = df_silver_check.count()
+print(f"Silver Conversations: {_conv_count} conversas, {len(df_silver_check.columns)} colunas")
 display(df_silver_check.limit(5))
 
 # Estatísticas rápidas
@@ -309,3 +315,13 @@ df_silver_check.select(
     F.avg("total_messages").alias("media_mensagens"),
     F.avg("duration_minutes").alias("media_duracao_min"),
 ).show()
+
+# Structured result for orchestrator
+import time as _time
+_nb_duration = _time.time() - _nb_start
+_msgs_count = spark.read.format("delta").load(SILVER_MESSAGES_PATH).count()
+save_run_metadata(boot["data_root"], "02_silver", "sucesso", _nb_duration, rows_written=_msgs_count + _conv_count)
+dbutils.notebook.exit(make_notebook_result(
+    "02_silver", rows_written=_msgs_count + _conv_count,
+    tables_written=[SILVER_MESSAGES_PATH, SILVER_CONVERSATIONS_PATH],
+))

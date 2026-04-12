@@ -1,11 +1,12 @@
 """Setup DBFS — Upload de dados e configuração inicial no Databricks.
 
 Script para preparar o ambiente Databricks com os dados necessários
-para o pipeline. Faz upload do parquet de dados brutos, dicionário
-e especificação do projeto para o DBFS.
+para o pipeline. Faz upload de dados brutos e sincronização de specs
+do diretório local para o DBFS.
 
 Uso:
-    python databricks/setup_dbfs.py --profile DEFAULT --source ./conversations_bronze.parquet
+    python databricks/setup_dbfs.py --profile DEFAULT
+    python databricks/setup_dbfs.py --include-generated
 
 Pré-requisitos:
     - databricks-sdk instalado: pip install databricks-sdk
@@ -16,7 +17,6 @@ Pré-requisitos:
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -67,10 +67,45 @@ def upload_para_dbfs(client, local_path: str, dbfs_path: str) -> None:
     print(f"  ✅ Upload concluído: {dbfs_path}")
 
 
+def upload_if_exists(client, local_path: Path, dbfs_path: str) -> None:
+    """Upload helper that skips missing files without interrupting the setup."""
+    if not local_path.exists() or not local_path.is_file():
+        print(f"  ⚠️  Arquivo não encontrado: {local_path}")
+        return
+    upload_para_dbfs(client, str(local_path), dbfs_path)
+
+
+def sync_specs(client, spec_dir: Path, include_generated: bool) -> None:
+    """Sync spec artifacts from local folder to DBFS specs folder."""
+    print(f"Sincronizando specs de: {spec_dir}")
+
+    upload_if_exists(client, spec_dir / "conversations_bronze.parquet", "/mnt/delta/specs/conversations_bronze.parquet")
+    upload_if_exists(client, spec_dir / "dicionario_dados.md", "/mnt/delta/specs/dicionario_dados.md")
+    upload_if_exists(client, spec_dir / "descricao_kpis.md", "/mnt/delta/specs/descricao_kpis.md")
+    upload_if_exists(client, spec_dir / "spec_meta.json", "/mnt/delta/specs/spec_meta.json")
+
+    if not include_generated:
+        return
+
+    generated_dir = spec_dir / "generated"
+    if not generated_dir.exists() or not generated_dir.is_dir():
+        print(f"  ⚠️  Diretório de gerados não encontrado: {generated_dir}")
+        return
+
+    client.dbfs.mkdirs("/mnt/delta/specs/generated")
+    print("Sincronizando artefatos gerados...")
+    for file_path in sorted(generated_dir.rglob("*")):
+        if not file_path.is_file():
+            continue
+        rel = file_path.relative_to(generated_dir).as_posix()
+        upload_para_dbfs(client, str(file_path), f"/mnt/delta/specs/generated/{rel}")
+
+
 def criar_diretorios_dbfs(client) -> None:
     """Cria a estrutura de diretórios no DBFS para o pipeline."""
     diretorios = [
         "/mnt/delta/specs",
+        "/mnt/delta/specs/generated",
         "/mnt/delta/bronze",
         "/mnt/delta/silver",
         "/mnt/delta/silver/messages",
@@ -82,6 +117,10 @@ def criar_diretorios_dbfs(client) -> None:
         "/mnt/delta/gold/analytics",
         "/mnt/delta/gold/vendor_analysis",
         "/mnt/delta/monitoring",
+        "/mnt/delta/monitoring/pipeline_runs",
+        "/mnt/delta/monitoring/agent_actions",
+        "/mnt/delta/monitoring/alerts",
+        "/mnt/delta/monitoring/notebook_runs",
     ]
 
     print("Criando estrutura de diretórios no DBFS...")
@@ -106,14 +145,30 @@ def main():
     parser.add_argument(
         "--source",
         type=str,
-        default="./conversations_bronze.parquet",
+        default="./data/specs/conversations_bronze.parquet",
         help="Caminho do arquivo parquet de dados brutos",
     )
     parser.add_argument(
         "--dicionario",
         type=str,
-        default="./Dicionario_de_Dados.md",
+        default="./data/specs/dicionario_dados.md",
         help="Caminho do dicionário de dados (markdown)",
+    )
+    parser.add_argument(
+        "--spec-dir",
+        type=str,
+        default="./data/specs",
+        help="Diretório local com specs e artefatos gerados",
+    )
+    parser.add_argument(
+        "--include-generated",
+        action="store_true",
+        help="Também sincroniza o diretório ./generated para /mnt/delta/specs/generated",
+    )
+    parser.add_argument(
+        "--skip-spec-sync",
+        action="store_true",
+        help="Pula sincronização do diretório de specs",
     )
     parser.add_argument(
         "--skip-upload",
@@ -148,19 +203,18 @@ def main():
     if args.skip_upload:
         print("\n⏩ Upload de dados pulado (--skip-upload)")
     else:
-        # Upload de dados
         print("\nUpload de dados para DBFS...")
+        upload_para_dbfs(client, args.source, "/mnt/delta/specs/conversations_bronze.parquet")
+        upload_para_dbfs(client, args.dicionario, "/mnt/delta/specs/dicionario_dados.md")
 
-        upload_para_dbfs(
-            client,
-            args.source,
-            "/mnt/delta/specs/conversations_bronze.parquet",
-        )
-
-        upload_para_dbfs(
-            client,
-            args.dicionario,
-            "/mnt/delta/specs/Dicionario_de_Dados.md",
+    if args.skip_spec_sync:
+        print("\n⏩ Sincronização de specs pulada (--skip-spec-sync)")
+    else:
+        print("\nSincronização de specs para DBFS...")
+        sync_specs(
+            client=client,
+            spec_dir=Path(args.spec_dir).resolve(),
+            include_generated=args.include_generated,
         )
 
     # Verificação final
@@ -183,8 +237,10 @@ def main():
     print("\n✅ Setup concluído!")
     print("\nPróximos passos:")
     print("  1. Importe os notebooks de databricks/notebooks/ para o Workspace")
+    print("     (ou use Repos → Add Repo apontando para o GitHub)")
     print("  2. Execute 01_bronze → 02_silver → 03_gold na ordem")
     print("  3. Ou use 04_agent_orchestrator para execução completa")
+    print("  4. Consulte databricks/RUNBOOK.md para detalhes operacionais")
 
 
 if __name__ == "__main__":

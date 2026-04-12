@@ -26,12 +26,18 @@ import sys
 import time
 from datetime import datetime
 
-repo_path = "/Workspace/Repos/agentic-pipeline"
+repo_path = os.getenv("PROJECT_REPO_PATH", "/Workspace/Repos/agentic-pipeline")
 if os.path.exists(repo_path):
     sys.path.insert(0, repo_path)
 
-os.environ["RUNTIME_ENV"] = "databricks"
-os.environ["DATA_ROOT"] = "/mnt/delta"
+from config.databricks_notebook import (
+    bootstrap_notebook, default_paths, notebook_workspace_path,
+    parse_notebook_result, save_run_metadata,
+)
+
+boot = bootstrap_notebook(explicit_repo_path=repo_path)
+paths = default_paths(boot["data_root"])
+repo_path = boot["repo_path"]
 
 # COMMAND ----------
 
@@ -51,7 +57,7 @@ def executar_notebook(path, timeout=600, params=None):
         params: Parâmetros opcionais para o notebook.
 
     Returns:
-        Dicionário com status, duração e resultado.
+        Dicionário com status, duração e resultado estruturado.
     """
     inicio = time.time()
     status = "sucesso"
@@ -59,10 +65,12 @@ def executar_notebook(path, timeout=600, params=None):
     erro = None
 
     try:
-        resultado = dbutils.notebook.run(path, timeout, params or {})
+        raw_result = dbutils.notebook.run(path, timeout, params or {})
+        resultado = parse_notebook_result(raw_result)
     except Exception as e:
         status = "falha"
         erro = str(e)
+        resultado = {"status": "falha", "error": str(e)}
 
     duracao = time.time() - inicio
 
@@ -84,9 +92,9 @@ def executar_notebook(path, timeout=600, params=None):
 
 # Definir notebooks do pipeline
 PIPELINE_NOTEBOOKS = [
-    "/Workspace/Repos/agentic-pipeline/databricks/notebooks/01_bronze",
-    "/Workspace/Repos/agentic-pipeline/databricks/notebooks/02_silver",
-    "/Workspace/Repos/agentic-pipeline/databricks/notebooks/03_gold",
+    notebook_workspace_path(repo_path, "01_bronze.py"),
+    notebook_workspace_path(repo_path, "02_silver.py"),
+    notebook_workspace_path(repo_path, "03_gold.py"),
 ]
 
 print(f"=== Pipeline Iniciado: {datetime.now().isoformat()} ===\n")
@@ -111,6 +119,22 @@ for nb_path in PIPELINE_NOTEBOOKS:
 print(f"\n=== Pipeline {'Completo ✅' if pipeline_ok else 'Falhou ❌'} ===")
 print(f"Total de notebooks executados: {len(resultados)}")
 print(f"Duração total: {sum(r['duracao_sec'] for r in resultados):.1f}s")
+
+# Persist pipeline-level run metadata
+_total_dur = sum(r["duracao_sec"] for r in resultados)
+_total_rows = sum(
+    (r.get("resultado") or {}).get("rows_written", 0)
+    for r in resultados
+    if isinstance(r.get("resultado"), dict)
+)
+save_run_metadata(
+    boot["data_root"],
+    "04_orchestrator",
+    "sucesso" if pipeline_ok else "falha",
+    _total_dur,
+    rows_written=_total_rows,
+    error=resultados[-1].get("erro") if not pipeline_ok else None,
+)
 
 # COMMAND ----------
 
@@ -145,14 +169,14 @@ display(df_resumo)
 # COMMAND ----------
 
 TABELAS = {
-    "Bronze": "/mnt/delta/bronze",
-    "Silver Messages": "/mnt/delta/silver/messages",
-    "Silver Conversations": "/mnt/delta/silver/conversations",
-    "Gold Sentimento": "/mnt/delta/gold/sentiment",
-    "Gold Personas": "/mnt/delta/gold/personas",
-    "Gold Segmentação": "/mnt/delta/gold/segmentation",
-    "Gold Analytics": "/mnt/delta/gold/analytics",
-    "Gold Vendedores": "/mnt/delta/gold/vendor_analysis",
+    "Bronze": paths["bronze"],
+    "Silver Messages": paths["silver_messages"],
+    "Silver Conversations": paths["silver_conversations"],
+    "Gold Sentimento": paths["gold_sentiment"],
+    "Gold Personas": paths["gold_personas"],
+    "Gold Segmentação": paths["gold_segmentation"],
+    "Gold Analytics": paths["gold_analytics"],
+    "Gold Vendedores": paths["gold_vendor_analysis"],
 }
 
 print("=== Verificação de Saúde ===\n")
@@ -199,8 +223,8 @@ from delta.tables import DeltaTable
 def verificar_novos_dados():
     """Verifica se há novos dados na camada Bronze que ainda não foram processados."""
     try:
-        bronze_path = "/mnt/delta/bronze"
-        silver_path = "/mnt/delta/silver/messages"
+        bronze_path = paths["bronze"]
+        silver_path = paths["silver_messages"]
 
         if not DeltaTable.isDeltaTable(spark, bronze_path):
             return {"novos_dados": False, "motivo": "Tabela Bronze não existe"}
