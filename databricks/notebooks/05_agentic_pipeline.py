@@ -31,8 +31,8 @@
 # MAGIC 5. Validate and display results
 # MAGIC
 # MAGIC **Architecture (Databricks Free Edition — Serverless):**
-# MAGIC - Uses `RUNTIME_ENV=local` with `DATA_ROOT` pointing to UC Volume (auto-detected catalog)
-# MAGIC - All I/O goes through `LocalDeltaBackend` (deltalake library) via UC Volume POSIX paths
+# MAGIC - Uses `RUNTIME_ENV=databricks` with `DATA_ROOT` pointing to UC Volume (auto-detected catalog)
+# MAGIC - All I/O goes through `DatabricksBackend` (PySpark) which writes Delta tables to UC Volumes
 # MAGIC - Delta tables written to Volumes are readable by PySpark at the same path
 # MAGIC - Monitoring uses Delta tables (not SQLite) via `force_delta_monitoring`
 # MAGIC - Serverless compute is provisioned automatically — no cluster management needed
@@ -82,9 +82,9 @@ except Exception as e:
     print("   Falling back to manual configuration below.")
 
 # ── Runtime Configuration ──────────────────────────────────────────────────
-# Use LocalDeltaBackend (deltalake library) with UC Volume paths.
-# This avoids PySpark for data processing while still writing to Volumes.
-os.environ["RUNTIME_ENV"] = "local"
+# Use DatabricksBackend (PySpark) for Delta writes — required because UC Volumes
+# don't support atomic rename operations that the deltalake library needs.
+os.environ["RUNTIME_ENV"] = "databricks"
 os.environ["FORCE_DELTA_MONITORING"] = "true"
 
 # Auto-detect Volume path: find the catalog from the current workspace

@@ -27,8 +27,8 @@
 │  │  │ Agent     │  │ (Polars) │  │ (UC Volumes)   │   │ │
 │  │  │ (LiteLLM) │  │          │  │                │   │ │
 │  │  └───────────┘  └──────────┘  └────────────────┘   │ │
-│  │  RUNTIME_ENV=local | DATA_ROOT=/Volumes/.../data   │ │
-│  │  LocalDeltaBackend (deltalake) via Volume paths    │ │
+│  │  RUNTIME_ENV=databricks | DATA_ROOT=/Volumes/.../data │ │
+│  │  DatabricksBackend (PySpark) → Delta on UC Volumes  │ │
 │  └────────────────────────────────────────────────────┘ │
 │                                                         │
 │  ┌────────────────────────────────────────────────────┐ │
@@ -173,7 +173,7 @@ replicando exatamente o que o Streamlit faz localmente:
 **Como funciona:**
 
 ```
-RUNTIME_ENV=local + DATA_ROOT=/Volumes/main/default/pipeline_data + FORCE_DELTA_MONITORING=true
+RUNTIME_ENV=databricks + DATA_ROOT=/Volumes/<catalog>/default/pipeline_data + FORCE_DELTA_MONITORING=true
 
    ┌─────────────┐    ┌──────────────┐    ┌───────────────┐
    │ LLM (API)   │ ←─ │ CodeGenAgent │ ─→ │ Generated     │
@@ -202,8 +202,8 @@ RUNTIME_ENV=local + DATA_ROOT=/Volumes/main/default/pipeline_data + FORCE_DELTA_
                                           └───────────────┘
 ```
 
-- Usa `LocalDeltaBackend` (deltalake library) via Volume POSIX paths
-- NÃO requer PySpark para o pipeline (apenas para verificação final opcionalmente)
+- Usa `DatabricksBackend` (PySpark) para escrever Delta tables em UC Volumes
+- Não usa `deltalake` library para escrita (UC Volumes não suporta `rename()` atômico)
 - Tabelas Delta criadas são acessíveis via PySpark: `spark.read.format("delta").load("/Volumes/main/default/pipeline_data/bronze")`
 - Monitoring usa Delta tables (não SQLite) via `FORCE_DELTA_MONITORING=true`
 
