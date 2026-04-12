@@ -68,7 +68,7 @@ def upload_para_dbfs(client, local_path: str, dbfs_path: str) -> None:
 
 
 def upload_if_exists(client, local_path: Path, dbfs_path: str) -> None:
-    """Upload helper that skips missing files without interrupting the setup."""
+    """Helper de upload que pula arquivos ausentes sem interromper o setup."""
     if not local_path.exists() or not local_path.is_file():
         print(f"  ⚠️  Arquivo não encontrado: {local_path}")
         return
@@ -76,7 +76,7 @@ def upload_if_exists(client, local_path: Path, dbfs_path: str) -> None:
 
 
 def sync_specs(client, spec_dir: Path, include_generated: bool) -> None:
-    """Sync spec artifacts from local folder to DBFS specs folder."""
+    """Sincroniza artefatos de spec da pasta local para a pasta de specs no DBFS."""
     print(f"Sincronizando specs de: {spec_dir}")
 
     upload_if_exists(client, spec_dir / "conversations_bronze.parquet", "/mnt/delta/specs/conversations_bronze.parquet")

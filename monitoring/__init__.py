@@ -1,1 +1,1 @@
-"""Monitoring package — pipeline run and agent action tracking."""
+"""Pacote de monitoramento — rastreamento de execuções do pipeline e ações dos agentes."""

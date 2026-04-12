@@ -1,4 +1,4 @@
-"""Configuration package for the Agentic Pipeline."""
+"""Pacote de configuração do Agentic Pipeline."""
 
 from config.settings import get_settings
 

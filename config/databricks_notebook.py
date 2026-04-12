@@ -1,10 +1,10 @@
-"""Shared helpers for Databricks notebook bootstrap.
+"""Helpers compartilhados para bootstrap de notebooks Databricks.
 
-Placed under `config` to avoid module-name conflicts with the external
-`databricks` SDK package.
+Colocado em `config` para evitar conflitos de nome de módulo com o pacote
+externo `databricks` SDK.
 
-Compatible with Databricks Free Edition (serverless compute, Unity Catalog
-Volumes). All paths use UC Volumes instead of DBFS.
+compatível com Databricks Free Edition (compute serverless, Unity Catalog
+Volumes). Todos os caminhos utilizam UC Volumes em vez de DBFS.
 """
 
 from __future__ import annotations
@@ -16,26 +16,26 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Default UC Volume path for pipeline data.
-# Format: /Volumes/<catalog>/<schema>/<volume>/<path>
-# The catalog is auto-detected at runtime via detect_volume_root().
+# Caminho padrão do UC Volume para dados do pipeline.
+# Formato: /Volumes/<catalog>/<schema>/<volume>/<path>
+# O catálogo é detectado automaticamente em tempo de execução via detect_volume_root().
 _DEFAULT_VOLUME_TEMPLATE = "/Volumes/{catalog}/default/pipeline_data"
 
 
 def detect_volume_root() -> str:
-    """Auto-detect the UC Volume root path by querying available catalogs.
+    """Detecta automaticamente o caminho raiz do UC Volume consultando os catálogos disponíveis.
 
-    On Databricks Free Edition the default catalog is often NOT 'main'
-    (e.g. 'workspace'). This function queries Spark SQL to find the right one.
-    Falls back to 'main' if detection fails.
+    No Databricks Free Edition o catálogo padrão frequentemente NÃO é 'main'
+    (ex: 'workspace'). Esta função consulta o Spark SQL para encontrar o correto.
+    Retorna 'main' como fallback se a detecção falhar.
     """
     try:
-        # spark is globally available in Databricks notebooks
+        # spark está disponível globalmente nos notebooks Databricks
         from pyspark.sql import SparkSession
         spark = SparkSession.builder.getOrCreate()
         rows = spark.sql("SHOW CATALOGS").collect()
         catalog_names = [r[0] for r in rows]
-        # Filter out system catalogs
+        # Filtrar catálogos do sistema
         user_catalogs = [
             c for c in catalog_names
             if c not in ("system", "hive_metastore", "samples") and not c.startswith("__")
@@ -52,12 +52,12 @@ def detect_volume_root() -> str:
     return _DEFAULT_VOLUME_TEMPLATE.format(catalog=catalog)
 
 
-# Lazy-initialized default; computed on first use by bootstrap_notebook / default_paths
+# Inicialização lazy; computado no primeiro uso por bootstrap_notebook / default_paths
 DEFAULT_VOLUME_ROOT: str | None = None
 
 
 def _get_volume_root() -> str:
-    """Return the volume root, auto-detecting on first call."""
+    """Retorna o caminho raiz do volume, detectando automaticamente na primeira chamada."""
     global DEFAULT_VOLUME_ROOT
     if DEFAULT_VOLUME_ROOT is None:
         DEFAULT_VOLUME_ROOT = detect_volume_root()
@@ -65,7 +65,7 @@ def _get_volume_root() -> str:
 
 
 def detect_repo_path(explicit_repo_path: str | None = None) -> str:
-    """Return the repository path inside Databricks Workspace when possible."""
+    """Retorna o caminho do repositório dentro do Databricks Workspace quando possível."""
     candidates = [
         explicit_repo_path,
         os.getenv("PROJECT_REPO_PATH"),
@@ -87,10 +87,10 @@ def bootstrap_notebook(
     explicit_repo_path: str | None = None,
     data_root: str | None = None,
 ) -> dict[str, str]:
-    """Configure sys.path and environment variables for Databricks execution.
+    """Configura sys.path e variáveis de ambiente para execução no Databricks.
 
-    On Databricks Free Edition (serverless), the default data_root points to a
-    Unity Catalog Volume that is auto-detected from the workspace catalog.
+    No Databricks Free Edition (serverless), o data_root padrão aponta para um
+    UC Volume detectado automaticamente a partir do catálogo do workspace.
     """
     if data_root is None:
         data_root = _get_volume_root()
@@ -110,9 +110,9 @@ def bootstrap_notebook(
 
 
 def default_paths(data_root: str | None = None) -> dict[str, str]:
-    """Return canonical layer paths for Databricks notebooks.
+    """Retorna os caminhos canônicos de cada camada para notebooks Databricks.
 
-    All paths point to Unity Catalog Volumes (POSIX-style paths).
+    Todos os caminhos apontam para Unity Catalog Volumes (caminhos estilo POSIX).
     """
     if data_root is None:
         data_root = _get_volume_root()
@@ -134,14 +134,14 @@ def default_paths(data_root: str | None = None) -> dict[str, str]:
 
 
 def notebook_workspace_path(repo_path: str, notebook_filename: str) -> str:
-    """Build a workspace notebook path accepted by dbutils.notebook.run."""
+    """Constrói o caminho de notebook no workspace aceito por dbutils.notebook.run."""
     stem = notebook_filename.removesuffix(".py")
     return f"{repo_path}/databricks/notebooks/{stem}"
 
 
 # ---------------------------------------------------------------------------
-# Structured result helpers — notebooks should use these to emit results
-# that the orchestrator and monitoring can consume.
+# Helpers de resultado estruturado — notebooks devem usar estes para emitir
+# resultados que o orquestrador e o monitoramento possam consumir.
 # ---------------------------------------------------------------------------
 
 
@@ -153,9 +153,9 @@ def make_notebook_result(
     error: str | None = None,
     extra: dict | None = None,
 ) -> str:
-    """Build a JSON result string for ``dbutils.notebook.exit()``.
+    """Constrói uma string JSON de resultado para ``dbutils.notebook.exit()``.
 
-    Example usage at the end of each notebook::
+    Exemplo de uso ao final de cada notebook::
 
         dbutils.notebook.exit(make_notebook_result(
             "01_bronze", rows_written=150347,
@@ -177,7 +177,7 @@ def make_notebook_result(
 
 
 def parse_notebook_result(raw: str | None) -> dict:
-    """Parse a JSON result string returned by ``dbutils.notebook.run()``."""
+    """Faz o parse de uma string JSON retornada por ``dbutils.notebook.run()``."""
     if not raw:
         return {"status": "desconhecido", "error": "resultado vazio"}
     try:
@@ -194,13 +194,13 @@ def save_run_metadata(
     rows_written: int = 0,
     error: str | None = None,
 ) -> None:
-    """Append a run-metadata record to the monitoring Delta table.
+    """Adiciona um registro de metadata de execução à tabela Delta de monitoramento.
 
-    Works both with a Spark session (Databricks) and with a plain path
-    string (local testing via deltalake).
+    Funciona tanto com uma sessão Spark (Databricks) quanto com um caminho
+    string (testes locais via deltalake).
 
-    Notebooks can call this at the end of execution to persist an audit
-    trail independently of the orchestrator.
+    Notebooks podem chamar esta função ao final da execução para persistir uma
+    trilha de auditoria independente do orquestrador.
     """
     record = {
         "notebook": notebook_name,
@@ -211,7 +211,7 @@ def save_run_metadata(
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-    # Try Spark path first (Databricks runtime)
+    # Tenta o caminho via Spark primeiro (runtime Databricks)
     try:
         from pyspark.sql import SparkSession
 
@@ -229,7 +229,7 @@ def save_run_metadata(
     except ImportError:
         pass
 
-    # Fallback: use deltalake library directly
+    # Fallback: usa a biblioteca deltalake diretamente
     import polars as pl
     from deltalake import write_deltalake
 

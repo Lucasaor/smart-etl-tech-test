@@ -1,1 +1,1 @@
-"""Pipeline package — Bronze → Silver → Gold transformations."""
+"""Pacote do pipeline — transformações Bronze → Silver → Gold."""

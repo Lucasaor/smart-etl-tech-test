@@ -1,1 +1,1 @@
-"""Bronze layer — raw data ingestion."""
+"""Camada Bronze — ingestão de dados brutos."""

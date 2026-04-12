@@ -1,1 +1,1 @@
-"""Silver layer — cleaning, extraction, and conversation aggregation."""
+"""Camada Silver — limpeza, extração e agregação de conversas."""

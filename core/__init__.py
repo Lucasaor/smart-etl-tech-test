@@ -1,4 +1,4 @@
-"""Core infrastructure package."""
+"""Pacote de infraestrutura central."""
 
 from core.storage import get_storage_backend
 from core.events import EventBus, get_event_bus

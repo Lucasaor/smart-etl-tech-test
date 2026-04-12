@@ -22,7 +22,7 @@ import sys
 from pathlib import Path, PurePosixPath
 
 
-# Default UC Volume coordinates
+# Coordenadas padrão do UC Volume
 # On Free Edition the default catalog is usually NOT "main".
 # Use --catalog to specify, or leave as "auto" for auto-detection.
 DEFAULT_CATALOG = "auto"
@@ -54,7 +54,7 @@ def get_workspace_client(profile: str | None = None):
 
 
 def detect_catalog(client, requested: str) -> str:
-    """Detect the correct catalog name.
+    """Detecta o nome correto do catálogo.
 
     If *requested* is 'auto', queries the workspace for available catalogs
     and picks the first usable one.  If a specific name is given, validates
@@ -64,7 +64,7 @@ def detect_catalog(client, requested: str) -> str:
         catalogs = list(client.catalogs.list())
     except Exception as e:
         if requested != "auto":
-            return requested            # can't validate; let it fail later
+            return requested            # não é possível validar; deixar falhar depois
         print(f"  ⚠️  Não foi possível listar catálogos: {e}")
         print("     Especifique o catálogo manualmente com --catalog <nome>")
         sys.exit(1)
@@ -79,11 +79,11 @@ def detect_catalog(client, requested: str) -> str:
         print(f"     Use: python databricks/setup_volumes.py --catalog <nome>")
         sys.exit(1)
 
-    # Auto-detect: prefer 'main', then first non-system catalog
+    # Auto-detect: preferir 'main', depois o primeiro catálogo não-sistema
     if "main" in catalog_names:
         return "main"
 
-    # Filter out system/internal catalogs
+    # Filtrar catálogos de sistema/internos
     user_catalogs = [n for n in catalog_names if not n.startswith(("__", "system", "hive_metastore"))]
     if len(user_catalogs) == 1:
         print(f"  🔍 Catálogo auto-detectado: {user_catalogs[0]}")
@@ -95,7 +95,7 @@ def detect_catalog(client, requested: str) -> str:
         print(f"     Para escolher outro: --catalog <nome>")
         return user_catalogs[0]
 
-    # Fallback: any catalog
+    # Fallback: qualquer catálogo
     if catalog_names:
         print(f"  ⚠️  Nenhum catálogo de usuário encontrado. Catálogos disponíveis: {', '.join(catalog_names)}")
         print(f"     Especifique com --catalog <nome>")
@@ -106,7 +106,7 @@ def detect_catalog(client, requested: str) -> str:
 
 
 def volume_path(catalog: str, schema: str, volume: str, *parts: str) -> str:
-    """Build a UC Volume path: /Volumes/<catalog>/<schema>/<volume>/<parts...>"""
+    """Constrói um caminho de UC Volume: /Volumes/<catalog>/<schema>/<volume>/<parts...>"""
     base = PurePosixPath("/Volumes") / catalog / schema / volume
     for p in parts:
         base = base / p
@@ -137,7 +137,7 @@ def upload_to_volume(client, local_path: str, vol_path: str) -> None:
 
 
 def upload_if_exists(client, local_path: Path, vol_path: str) -> None:
-    """Upload helper that skips missing files without interrupting the setup."""
+    """Helper de upload que pula arquivos ausentes sem interromper o setup."""
     if not local_path.exists() or not local_path.is_file():
         print(f"  ⚠️  Arquivo não encontrado: {local_path}")
         return
@@ -145,7 +145,7 @@ def upload_if_exists(client, local_path: Path, vol_path: str) -> None:
 
 
 def sync_specs(client, spec_dir: Path, base_path: str, include_generated: bool) -> None:
-    """Sync spec artifacts from local folder to UC Volume specs folder."""
+    """Sincroniza artefatos de spec da pasta local para a pasta de specs no UC Volume."""
     specs_path = f"{base_path}/specs"
     print(f"Sincronizando specs de: {spec_dir}")
 
@@ -226,7 +226,7 @@ def criar_diretorios_volume(client, base_path: str) -> None:
             client.files.create_directory(dir_path)
             print(f"  📁 {dir_path}")
         except Exception:
-            # Directory may already exist or be created implicitly
+            # Diretório pode já existir ou ser criado implicitamente
             print(f"  📁 {dir_path} (ok)")
 
 
@@ -312,7 +312,7 @@ def main():
         print("  2. Ou configure um perfil: databricks configure --profile DEFAULT")
         sys.exit(1)
 
-    # Detect / validate catalog
+    # Detectar / validar catálogo
     catalog = detect_catalog(client, args.catalog)
     if catalog != args.catalog:
         print(f"  📦 Catálogo resolvido: {catalog}")

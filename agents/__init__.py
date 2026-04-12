@@ -1,4 +1,4 @@
-"""Agents package."""
+"""Pacote de agentes."""
 
 __all__ = [
     "codegen_agent",

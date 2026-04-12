@@ -73,6 +73,288 @@ O sistema **recebe como entrada** uma amostra de dados brutos, um dicionário de
 | Frontend | **Streamlit** | Python nativo, interface de entrada de dados, funciona local e como Databricks App |
 | Monitoring | **SQLite** (local) / **Delta tables** (Databricks) | Logs de pipeline runs e ações dos agentes |
 
+### Entradas do Sistema
+
+O pipeline é orientado por **três entradas obrigatórias**, enviadas via Streamlit ou configuração:
+
+| Entrada | Formato | Propósito |
+|---------|---------|-----------|
+| **Amostra de dados brutos** | Parquet ou CSV | Dados que serão processados na camada Bronze |
+| **Dicionário de dados** | Markdown | Descreve colunas, tipos, valores esperados e particularidades |
+| **Descrição dos KPIs** | Markdown | Define os indicadores e análises desejados na camada Gold |
+
+Os agentes analisam essas entradas e implementam automaticamente os scripts do pipeline.
+
+---
+
+## Início Rápido
+
+Existem **três formas** de executar a solução:
+
+| Método | Quando usar |
+|--------|------------|
+| **Docker Compose** | Forma mais simples. Recomendado para avaliação e demonstrações |
+| **Local (Python)** | Para desenvolvimento e testes |
+| **Databricks Free Edition** | Produção com serverless e Unity Catalog |
+
+---
+
+## Opção 1: Docker Compose (Recomendado)
+
+### Pré-requisitos
+
+- [Docker](https://docs.docker.com/get-docker/) e Docker Compose instalados
+- Uma API key de LLM (OpenAI, Anthropic ou Google) **ou** Ollama para execução 100% local
+
+### Passo a Passo
+
+**1. Clonar o repositório:**
+
+```bash
+git clone https://github.com/Lucasaor/smart-etl-tech-test.git
+cd smart-etl-tech-test
+```
+
+**2. Configurar variáveis de ambiente:**
+
+```bash
+cp .env.example .env
+```
+
+Edite o arquivo `.env` e configure pelo menos o modelo LLM e uma API key:
+
+```bash
+# Escolha um dos providers:
+
+# OpenAI
+LLM_MODEL=gpt-4o-mini
+OPENAI_API_KEY=sk-...
+
+# OU Anthropic
+LLM_MODEL=anthropic/claude-3-haiku-20240307
+ANTHROPIC_API_KEY=sk-ant-...
+
+# OU Google
+LLM_MODEL=gemini/gemini-1.5-flash
+GOOGLE_API_KEY=...
+
+# OU Ollama (sem API key — veja passo 3b)
+LLM_MODEL=ollama/llama3
+```
+
+**3a. Executar com API externa (OpenAI, Anthropic, Google):**
+
+```bash
+docker-compose -f docker/docker-compose.yml up --build
+```
+
+**3b. Executar com Ollama local (sem API key):**
+
+```bash
+docker-compose -f docker/docker-compose.yml --profile ollama up --build
+```
+
+> O serviço `ollama-setup` baixa automaticamente o modelo `llama3` na primeira execução.
+
+**4. Acessar o dashboard:**
+
+Abra `http://localhost:8501` no navegador.
+
+**5. Usar a interface:**
+
+1. Navegue para a página **Configuração** (barra lateral)
+2. Faça upload da amostra de dados (`.parquet` ou `.csv`)
+3. Cole ou edite o **Dicionário de Dados** (markdown)
+4. Cole ou edite a **Descrição dos KPIs** (markdown)
+5. Clique em **Salvar Especificação** e depois **Executar Pipeline**
+6. Acompanhe a execução em **Pipeline Monitor** e **Agent Monitor**
+7. Visualize os resultados em **Gold Dashboard**
+
+### Serviços Docker
+
+| Serviço | Porta | Descrição |
+|---------|-------|-----------|
+| `streamlit` | 8501 | Dashboard + Pipeline (sempre ativo) |
+| `ollama` | 11434 | LLM local (apenas com perfil `ollama`) |
+| `ollama-setup` | — | Download automático do modelo llama3 |
+
+### Comandos Úteis
+
+```bash
+# Parar os serviços
+docker-compose -f docker/docker-compose.yml down
+
+# Rebuild após alterações no código
+docker-compose -f docker/docker-compose.yml up --build
+
+# Ver logs em tempo real
+docker-compose -f docker/docker-compose.yml logs -f streamlit
+
+# Limpar dados e recomeçar
+rm -rf data/bronze data/silver data/gold data/monitoring
+```
+
+---
+
+## Opção 2: Execução Local (Python)
+
+### Pré-requisitos
+
+- Python 3.11+
+- (Opcional) [Ollama](https://ollama.ai) para modelos LLM locais
+
+### Passo a Passo
+
+**1. Clonar e configurar o ambiente:**
+
+```bash
+git clone https://github.com/Lucasaor/smart-etl-tech-test.git
+cd smart-etl-tech-test
+
+# Criar ambiente virtual
+python3 -m venv .venv
+source .venv/bin/activate  # Linux/macOS
+# .venv\Scripts\activate   # Windows
+
+# Instalar dependências
+pip install -e ".[dev]"
+```
+
+**2. Configurar variáveis de ambiente:**
+
+```bash
+cp .env.example .env
+# Editar .env com suas API keys (mesma configuração descrita na seção Docker)
+```
+
+**3. Executar os testes (opcional):**
+
+```bash
+pytest tests/ -v
+```
+
+> 224 testes cobrindo todas as camadas: fundação, Bronze, Silver, Gold e agentes.
+
+**4. Iniciar a interface Streamlit:**
+
+```bash
+streamlit run frontend/app.py
+```
+
+Acesse `http://localhost:8501` e siga os passos da seção "Usar a interface" acima.
+
+---
+
+## Opção 3: Databricks Free Edition
+
+O pipeline roda na **Databricks Free Edition** usando compute **serverless** e **Unity Catalog Volumes**. Não é necessário criar ou gerenciar clusters.
+
+### Pré-requisitos
+
+- Conta [Databricks Free Edition](https://www.databricks.com/try-databricks)
+- Python 3.11+ local (para os scripts de setup)
+- Uma API key de LLM
+
+### Passo a Passo
+
+**1. Instalar o SDK do Databricks localmente:**
+
+```bash
+pip install databricks-sdk
+```
+
+**2. Configurar credenciais:**
+
+```bash
+export DATABRICKS_HOST=https://seu-workspace.cloud.databricks.com
+export DATABRICKS_TOKEN=dapi...
+```
+
+> O token pode ser gerado em **Settings → Developer → Access Tokens** no Databricks.
+
+**3. Fazer upload dos dados para UC Volumes:**
+
+```bash
+# Setup completo: cria volume + faz upload dos dados e specs
+python databricks/setup_volumes.py
+
+# Opcional: incluir código gerado (se já existir em data/specs/generated)
+python databricks/setup_volumes.py --include-generated
+```
+
+**4. Enviar API keys via Databricks Secrets:**
+
+```bash
+# Enviar variáveis do .env como secrets
+python databricks/push_secrets.py
+
+# Prévia sem enviar (dry run)
+python databricks/push_secrets.py --dry-run
+```
+
+**5. Importar notebooks no Databricks:**
+
+No Workspace do Databricks:
+1. Clique em **Workspace** → **Repos** → **Add Repo**
+2. Cole a URL do repositório: `https://github.com/Lucasaor/smart-etl-tech-test.git`
+3. Os notebooks ficam em `databricks/notebooks/`
+
+**6. Executar o pipeline:**
+
+Existem duas abordagens:
+
+| Notebook | Abordagem | Descrição |
+|----------|-----------|-----------|
+| `04_agent_orchestrator.py` | **Determinístico** | Executa Bronze → Silver → Gold sequencialmente usando o código já implementado |
+| `05_agentic_pipeline.py` | **Agêntico (LLM)** | Gera código dinamicamente via LLM e executa — abordagem recomendada |
+
+Execute o notebook escolhido diretamente no Databricks. O compute serverless é provisionado automaticamente.
+
+### Notebooks Disponíveis
+
+| Notebook | Camada | Descrição |
+|----------|--------|-----------|
+| `01_bronze.py` | Bronze | Ingestão com PySpark, validação de schema, Delta incremental |
+| `02_silver.py` | Silver | Dedup, extração de entidades (UDFs), agregação por conversa |
+| `03_gold.py` | Gold | Sentimento, personas, segmentação, lead scoring, vendedores |
+| `04_agent_orchestrator.py` | Orquestração | Execução sequencial com verificação de saúde e detecção de novos dados |
+| `05_agentic_pipeline.py` | **Agêntico** | Pipeline completo LLM-driven (recomendado) |
+
+### Arquitetura Serverless
+
+- **Compute**: serverless (provisionado automaticamente, sem gerenciamento)
+- **Storage**: Unity Catalog Volumes (`/Volumes/<catalog>/default/pipeline_data/`)
+- **Governance**: Unity Catalog built-in
+- **Jobs**: até 5 Jobs agendáveis (substitui a limitação de Workflows do Community Edition)
+- **LLM API keys**: via Databricks Secrets ou notebook widgets (sem env vars de cluster)
+
+> Consulte [databricks/RUNBOOK.md](databricks/RUNBOOK.md) para o guia operacional completo.
+
+---
+
+## Configuração do LLM
+
+O sistema é **agnóstico a plataforma de LLM**. Configure via `.env`:
+
+```bash
+# OpenAI
+LLM_MODEL=gpt-4o-mini
+
+# Anthropic
+LLM_MODEL=anthropic/claude-3-haiku-20240307
+
+# Google
+LLM_MODEL=gemini/gemini-1.5-flash
+
+# Ollama (local, sem API key)
+LLM_MODEL=ollama/llama3
+OLLAMA_BASE_URL=http://localhost:11434
+```
+
+A cadeia de fallback é automática: se o modelo primário falha, o sistema tenta o `LLM_FALLBACK_MODEL`. Custos são rastreados automaticamente com budget control (`LLM_MAX_COST_PER_RUN`).
+
+---
+
 ## Estrutura do Projeto
 
 ```
@@ -82,7 +364,8 @@ O sistema **recebe como entrada** uma amostra de dados brutos, um dicionário de
 │
 ├── config/                        # Configuração
 │   ├── settings.py                # Pydantic Settings (runtime, paths, LLM, specs)
-│   └── llm_config.py              # Cadeia de fallback de modelos + cost tracking
+│   ├── llm_config.py              # Cadeia de fallback de modelos + cost tracking
+│   └── databricks_notebook.py     # Helpers para bootstrap nos notebooks Databricks
 │
 ├── core/                          # Infraestrutura
 │   ├── storage.py                 # StorageBackend ABC → LocalDelta / Databricks
@@ -92,6 +375,7 @@ O sistema **recebe como entrada** uma amostra de dados brutos, um dicionário de
 ├── pipeline/                      # Transformações de dados
 │   ├── specs.py                   # ProjectSpec: dados brutos + dicionário + KPIs
 │   ├── orchestrator.py            # Orquestrador spec-aware
+│   ├── executor.py                # Execução segura de código gerado
 │   ├── bronze/                    # Ingestão de dados brutos → Delta
 │   │   ├── ingestion.py           # Validação, parse metadata, incremental
 │   │   └── simulator.py           # Simula chegada incremental de dados
@@ -124,6 +408,8 @@ O sistema **recebe como entrada** uma amostra de dados brutos, um dicionário de
 │
 ├── frontend/                      # Dashboard Streamlit
 │   ├── app.py                     # Entry point principal
+│   ├── theme.py                   # Tema e estilização da UI
+│   ├── viz_config.py              # Especificações de visualização dos KPIs
 │   └── pages/
 │       ├── 0_configuracao.py      # Upload: dados brutos, dicionário, KPIs
 │       ├── 1_pipeline_monitor.py  # Status, histórico, timeline, alertas
@@ -137,19 +423,14 @@ O sistema **recebe como entrada** uma amostra de dados brutos, um dicionário de
 │   ├── test_phase4.py             # Gold + codegen agent (45 testes)
 │   └── test_phase5.py             # Agent system + LangGraph (96 testes)
 │
-├── data/
-│   ├── specs/                     # Especificações do projeto (input do usuário)
-│   ├── bronze/                    # Tabela Delta Bronze
-│   ├── silver/                    # Tabelas Delta Silver
-│   ├── gold/                      # Tabelas Delta Gold
-│   └── monitoring/                # SQLite de monitoramento
-│
 ├── docker/                        # Containerização
 │   ├── Dockerfile                 # Imagem Python 3.11 + deps
 │   └── docker-compose.yml         # Streamlit + Ollama (opcional)
 │
 └── databricks/                    # Integração Databricks (Free Edition)
+    ├── push_secrets.py            # Envio de secrets do .env para Databricks
     ├── setup_volumes.py           # Upload de dados para UC Volumes
+    ├── setup_dbfs.py              # Setup alternativo via DBFS
     ├── RUNBOOK.md                 # Guia operacional completo
     └── notebooks/
         ├── 01_bronze.py           # Ingestão (PySpark + Delta)
@@ -159,377 +440,87 @@ O sistema **recebe como entrada** uma amostra de dados brutos, um dicionário de
         └── 05_agentic_pipeline.py # Pipeline agêntico completo (LLM-driven)
 ```
 
-## Entradas do Sistema
+---
 
-O pipeline é orientado por **três entradas obrigatórias**, enviadas via Streamlit ou configuração:
+## Detalhes da Implementação
 
-| Entrada | Formato | Propósito |
-|---------|---------|-----------|
-| **Amostra de dados brutos** | Parquet ou CSV | Dados que serão processados na camada Bronze |
-| **Dicionário de dados** | Markdown | Descreve colunas, tipos, valores esperados e particularidades |
-| **Descrição dos KPIs** | Markdown | Define os indicadores e análises desejados na camada Gold |
+### Camada Bronze — Ingestão
 
-Os agentes analisam essas entradas e implementam automaticamente os scripts do pipeline, documentados em português brasileiro.
+- Validação de schema contra dicionário de dados (14 colunas esperadas)
+- Parse da coluna `metadata` (JSON string) → 6 colunas tipadas
+- Cast de `timestamp` string → `Datetime`
+- Adição de `_ingested_at` e `_source_file` para rastreabilidade
+- 3 modos: `full` (overwrite), `incremental` (append novos), `auto` (detecção automática)
 
-## Instalação
+### Camada Silver — Limpeza e Extração
 
-### Pré-requisitos
+- **Deduplicação** por status (sent+delivered → mantém delivered)
+- **Extração de entidades** via regex: CPF, email, CEP, telefone, placa de veículo, concorrentes
+- **Mascaramento de PII** com hash SHA-256 determinístico
+- **Agregação por conversa** (~15k rows): contagens, tempos, entidades extraídas, outcome
 
-- Python 3.11+
-- (Opcional) Ollama para modelos locais
-- (Opcional) Docker para execução containerizada
+### Camada Gold — Analytics
 
-### Setup
+- **Sentimento**: score heurístico baseado em outcome (50%), engajamento (20%), tempo de resposta (15%), duração (15%)
+- **Personas**: 5 tipos (Decidido, Pesquisador, Negociador, Fantasma, Indeciso) com system de scoring multi-dimensão
+- **Segmentação**: 7 dimensões (engajamento, velocidade, veículo, região, origem, duração, qualificação)
+- **Funil de conversão**: contagem e percentual por outcome
+- **Lead scoring** (0-100): engajamento (30pts), tempo resposta (25pts), PII (20pts), profundidade (15pts), veículo (10pts)
+- **Performance por campanha**: conversas, vendas, taxa de conversão, tempo de resposta
+- **Métricas por vendedor**: conversão, ghosting, velocidade, score (0-100)
 
-```bash
-# Clonar o repositório
-git clone <repo-url>
-cd agentic-pipeline
+### Sistema de Agentes
 
-# Criar ambiente virtual
-python3 -m venv .venv
-source .venv/bin/activate
+- **CodeGen Agent**: analisa spec → gera código Python/Polars para cada camada do pipeline
+- **Pipeline Agent** (LangGraph): state machine — `load_spec` → `analyze` → `plan` → `execute` (B/S/G) → `validate` → `complete`
+- **Monitor Agent** (LangGraph): loop cíclico — detecta novos dados, verifica saúde, dispara pipeline automaticamente
+- **Repair Agent** (LangGraph): diagnóstico e auto-correção — 5 estratégias (retry, skip, regenerate, data fix, escalate)
 
-# Instalar dependências
-pip install -e ".[dev]"
+### Monitoramento
 
-# Configurar ambiente
-cp .env.example .env
-# Editar .env com suas API keys e preferências
+- `PipelineRun`: registro de cada execução com steps, duração, status
+- `AgentAction`: registro de ações dos agentes com tokens/custo LLM
+- `Alert`: alertas com severidade, fonte e estado de resolução
+- Persistência via SQLite (local) ou Delta tables (Databricks)
+
+---
+
+## Testes
+
+224 testes automatizados organizados por fase:
+
+```
+tests/test_phase1.py — 34 testes (fundação: config, storage, compute, events, specs)
+tests/test_phase2.py — 16 testes (bronze: ingestão, orchestrator, spec integration)
+tests/test_phase3.py — 33 testes (silver: limpeza, extração, conversas, spec tools)
+tests/test_phase4.py — 45 testes (gold: sentimento, personas, segmentação, analytics, vendedores)
+tests/test_phase5.py — 96 testes (agentes: data tools, quality tools, pipeline/monitor/repair agents)
 ```
 
-### Rodar testes
+Para executar:
 
 ```bash
+# Todos os testes
 pytest tests/ -v
+
+# Apenas uma fase
+pytest tests/test_phase1.py -v
+
+# Com cobertura
+pytest tests/ --cov=pipeline --cov=agents --cov=core --cov=config --cov=monitoring
 ```
 
-### Interface Streamlit
-
-```bash
-streamlit run frontend/app.py
-```
-
-Acesse `http://localhost:8501` e navegue para a página **Configuração** para enviar seus dados, dicionário e KPIs.
-
-## Configuração LLM
-
-O sistema é **agnóstico a plataforma de LLM**. Configure via `.env`:
-
-```bash
-# OpenAI
-LLM_MODEL=gpt-4o-mini
-
-# Anthropic
-LLM_MODEL=anthropic/claude-3-haiku-20240307
-
-# Google
-LLM_MODEL=gemini/gemini-1.5-flash
-
-# Ollama (local, sem API key)
-LLM_MODEL=ollama/llama3
-OLLAMA_BASE_URL=http://localhost:11434
-```
-
-A cadeia de fallback é automática: se o modelo primário falha, o sistema tenta o `LLM_FALLBACK_MODEL`. Custos são rastreados automaticamente com budget control (`LLM_MAX_COST_PER_RUN`).
-
-## Docker Compose
-
-Para execução containerizada sem configuração local:
-
-```bash
-# Build e execução completa
-docker-compose -f docker/docker-compose.yml up --build
-
-# Apenas Streamlit (com API externas — OpenAI, Anthropic, etc.)
-docker-compose -f docker/docker-compose.yml up streamlit
-
-# Com Ollama local (sem necessidade de API key)
-docker-compose -f docker/docker-compose.yml --profile ollama up
-```
-
-Acesse `http://localhost:8501` para o dashboard.
-
-**Serviços disponíveis:**
-
-| Serviço | Porta | Descrição |
-|---------|-------|-----------|
-| `streamlit` | 8501 | Dashboard + Pipeline (sempre ativo) |
-| `ollama` | 11434 | LLM local (perfil `ollama`) |
-| `ollama-setup` | — | Download automático do modelo llama3 |
-
-Os dados persistem no volume Docker `pipeline-data`. Configure API keys via `.env`.
-
-## Integração Databricks (Free Edition)
-
-O pipeline roda na **Databricks Free Edition** usando compute **serverless** e **Unity Catalog Volumes**.
-Não é necessário criar ou gerenciar clusters.
-
-### Setup inicial
-
-```bash
-# Instalar SDK
-pip install databricks-sdk
-
-# Configurar credenciais
-export DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
-export DATABRICKS_TOKEN=dapi...
-
-# Setup completo (criar volume + upload de dados e specs)
-python databricks/setup_volumes.py
-
-# Opcional: incluir código gerado em data/specs/generated
-python databricks/setup_volumes.py --include-generated
-```
-
-### Notebooks
-
-Importe os notebooks de `databricks/notebooks/` para o Workspace:
-
-| Notebook | Camada | Descrição |
-|----------|--------|-----------|
-| `01_bronze.py` | Bronze | Ingestão com PySpark, validação de schema, Delta incremental |
-| `02_silver.py` | Silver | Dedup, extração de entidades (UDFs), agregação por conversa |
-| `03_gold.py` | Gold | Sentimento, personas, segmentação, lead scoring, vendedores |
-| `04_agent_orchestrator.py` | Orquestração | Execução sequencial, verificação de saúde, detecção de novos dados |
-| `05_agentic_pipeline.py` | **Agêntico** | Pipeline completo LLM-driven (recomendado) |
-
-### Arquitetura Serverless
-
-- **Compute**: serverless (provisionado automaticamente, sem gerenciamento)
-- **Storage**: Unity Catalog Volumes (`/Volumes/main/default/pipeline_data/`)
-- **Governance**: Unity Catalog built-in
-- **Jobs**: até 5 Jobs agendáveis (substitui a limitação de Workflows do Community Edition)
-- **LLM API keys**: via Databricks Secrets ou notebook widgets (sem env vars de cluster)
-
-Consulte [databricks/RUNBOOK.md](databricks/RUNBOOK.md) para detalhes operacionais completos.
+---
 
 ## Status de Implementação
 
 | Fase | Descrição | Status |
 |------|-----------|--------|
-| **1** | Fundação (config, storage, compute, events, LLM provider, **specs**) | ✅ Completa |
-| **2** | Camada Bronze (ingestão, incremental, orchestrator **spec-aware**) | ✅ Completa |
-| **3** | Camada Silver (limpeza, extração, agregação, **spec tools**) | ✅ Completa |
+| **1** | Fundação (config, storage, compute, events, LLM provider, specs) | ✅ Completa |
+| **2** | Camada Bronze (ingestão, incremental, orchestrator spec-aware) | ✅ Completa |
+| **3** | Camada Silver (limpeza, extração, agregação, spec tools) | ✅ Completa |
 | **4** | Camada Gold (sentimento, personas, segmentação, analytics, vendedores) | ✅ Completa |
 | **5** | Sistema de Agentes (tools, pipeline, monitor, repair) | ✅ Completa |
 | **6** | Frontend Streamlit (configuração + 3 dashboards) | ✅ Completa |
 | **7** | Docker Compose (Streamlit + Ollama opcional) | ✅ Completa |
 | **8** | Migração Databricks (5 notebooks + setup UC Volumes) | ✅ Completa |
-
-## Fase 1 — Fundação
-
-### O que foi implementado
-
-**`config/settings.py`** — Configuração centralizada via Pydantic Settings:
-- `RUNTIME_ENV` (local / databricks) — determina backends de storage e compute
-- Paths derivados automáticos para Bronze/Silver/Gold/Monitoring/**Specs**
-- Todas as variáveis de LLM, pipeline e frontend
-- Singleton via `get_settings()` com cache
-
-**`config/llm_config.py`** — Gestão de modelos LLM:
-- Registry de modelos conhecidos com custos por token
-- `ModelSpec` dataclass com metadata de cada modelo
-- `LLMConfig` com cadeia de fallback e tracking de custo acumulado
-- Controle de orçamento (`budget_exceeded`, `budget_remaining`)
-
-**`core/storage.py`** — Abstração de storage Delta Lake:
-- `StorageBackend` ABC: `read_table`, `write_table`, `table_exists`, `get_table_version`, `get_table_row_count`
-- `LocalDeltaBackend`: deltalake + Polars (para execução local/Docker)
-- `DatabricksBackend`: PySpark + Delta (para Databricks) — mesma interface
-- Factory singleton via `get_storage_backend()`
-
-**`core/compute.py`** — Abstração de compute:
-- `ComputeBackend` ABC: `sql()` e `read_parquet()`
-- `PolarsCompute`: Polars + DuckDB para SQL (execução local)
-- `SparkCompute`: PySpark (Databricks)
-- Factory singleton via `get_compute_backend()`
-
-**`core/events.py`** — Event bus in-process:
-- Pub/sub síncrono com subscriber por tipo de evento ou wildcard
-- 10 tipos de evento (pipeline, step, data, agent, alert)
-- Funções helper: `emit_pipeline_started`, `emit_step_completed`, `emit_step_failed`, `emit_agent_action`
-- Erros em subscribers não propagam (sistema resiliente)
-
-**`agents/llm_provider.py`** — Wrapper unificado sobre LiteLLM:
-- Retry com exponential backoff (tenacity) em erros transientes
-- Fallback automático pela cadeia de modelos
-- Suporte a JSON mode (structured output)
-- Tracking de tokens/custo por chamada e acumulado
-- `BudgetExceededError` quando orçamento é ultrapassado
-- Funciona com OpenAI, Anthropic, Google, Ollama, e 100+ providers
-
-**`pipeline/specs.py`** — Especificação do projeto:
-- `ProjectSpec`: modelo que armazena as 3 entradas obrigatórias (dados brutos, dicionário, KPIs)
-- `analisar_amostra()`: análise automática do schema dos dados (linhas, colunas, tipos, nulos)
-- `salvar_spec()` / `carregar_spec()`: persistência em disco (JSON + markdown)
-- Validação: verifica se todas as entradas estão presentes e acessíveis
-
-**`agents/codegen_agent.py`** — Agente gerador de código (scaffold):
-- `analisar_spec()`: análise LLM do dicionário + KPIs → identificação de colunas PII, JSON, timestamps
-- `gerar_plano_gold()`: gera plano de implementação para a camada Gold a partir dos KPIs
-
-**`agents/tools/spec_tools.py`** — Ferramentas de análise de specs:
-- `obter_preview_dados()`: preview das primeiras N linhas
-- `obter_estatisticas_colunas()`: estatísticas descritivas por coluna
-- `validar_spec_completa()`: validação detalhada para uso pelos agentes
-
-**`monitoring/models.py`** — Modelos de dados:
-- `PipelineRun`: registro de execução completa com steps
-- `StepRun`: registro de um step individual (Bronze/Silver/Gold)
-- `AgentAction`: registro de ação de agente (com tokens/custo)
-- `Alert`: alerta com severidade, fonte, e estado de resolução
-
-**`monitoring/store.py`** — Persistência SQLite:
-- Schema auto-criado com 4 tabelas (pipeline_runs, step_runs, agent_actions, alerts)
-- CRUD completo para todos os modelos
-- Queries de agregação: custo total LLM, tokens totais
-- Singleton via `get_monitoring_store()`
-
-## Fase 2 — Camada Bronze
-
-### O que foi implementado
-
-**`pipeline/bronze/ingestion.py`** — Ingestão completa Bronze:
-- Validação de schema contra dicionário de dados (14 colunas esperadas)
-- Parse da coluna `metadata` (JSON string) → 6 colunas tipadas
-- Cast de `timestamp` string → `Datetime`
-- Adição de `_ingested_at` e `_source_file` para rastreabilidade
-- 3 modos: `full` (overwrite), `incremental` (append novos), `auto` (detecta automaticamente)
-- Path de dados pode vir da `ProjectSpec` (spec-aware)
-
-**`pipeline/bronze/simulator.py`** — Simulador de dados incrementais
-
-**`pipeline/orchestrator.py`** — Orquestrador de pipeline:
-- `run_pipeline(layers)`: executa steps em sequência
-- **Aceita `ProjectSpec`** para configurar paths e parâmetros dinamicamente
-- Carrega spec automaticamente do diretório configurado se disponível
-
-## Fase 3 — Camada Silver
-
-### O que foi implementado
-
-**`pipeline/silver/cleaning.py`** — Limpeza e deduplicação:
-- Dedup por status (sent+delivered → mantém delivered)
-- Flag `is_audio_transcription` com normalização do body
-
-**`pipeline/silver/extraction.py`** — Extração de entidades via regex:
-- CPF, email, CEP, telefone, placa de veículo, concorrentes
-- Mascaramento de PII com hash SHA-256 determinístico
-
-**`pipeline/silver/conversations.py`** — Agregação por conversa (~15k rows):
-- Contagens, tempos, entidades extraídas, outcome, identidade do lead
-
-**`frontend/pages/0_configuracao.py`** — Interface de configuração:
-- Upload de amostra de dados brutos (parquet/csv) com preview e schema
-- Editor de dicionário de dados (markdown)
-- Editor de descrição dos KPIs (markdown)
-- Salvar especificação e disparar pipeline
-
-## Fase 4 — Camada Gold
-
-### O que foi implementado
-
-**`pipeline/gold/sentiment.py`** — Análise de sentimento por conversa:
-- Score heurístico baseado em 4 fatores: outcome (peso 0.5), engajamento do lead (0.2), tempo de resposta (0.15), duração (0.15)
-- Classificação em positivo/neutro/negativo com score contínuo [-1, 1]
-- Coluna `sentimento_fatores` para explicabilidade
-- Output: tabela Gold ~15k rows com sentimento por conversa
-
-**`pipeline/gold/personas.py`** — Classificação de personas de leads:
-- 5 personas: **Decidido** (fecha rápido), **Pesquisador** (muitas perguntas), **Negociador** (longo, compara), **Fantasma** (ghosting), **Indeciso** (sem decisão)
-- Sistema de scoring multi-dimensão: cada conversa recebe score em todas as personas, a maior ganha
-- Confiança (0-1) e fatores transparentes por conversa
-
-**`pipeline/gold/segmentation.py`** — Segmentação multidimensional:
-- **Engajamento**: alto (≥15 msgs) / médio (≥6) / baixo
-- **Velocidade de resposta**: rápido (<2min) / moderado / lento
-- **Veículo**: com/sem veículo mencionado
-- **Região**: sudeste/sul/nordeste/centro-oeste/norte
-- **Origem**: google/facebook/instagram/indicação/outros
-- **Duração**: flash/curta/média/longa
-- **Qualificação do lead**: alta (≥2 PII) / média / baixa
-
-**`pipeline/gold/analytics.py`** — Analytics e KPIs:
-- **Funil de conversão**: contagem e percentual por outcome
-- **Lead scoring** (0-100): engajamento (30pts), tempo resposta (25pts), PII compartilhada (20pts), profundidade conversa (15pts), veículo (10pts)
-- **Performance por campanha**: conversas, vendas, taxa conversão, tempo resposta
-
-**`pipeline/gold/vendor_analysis.py`** — Métricas por vendedor:
-- Contagens: total conversas, vendas, ghosting, perdidos por preço/concorrente
-- Taxa de conversão e taxa de ghosting
-- Média de mensagens, tempo de resposta, duração
-- **Score do vendedor** (0-100): conversão (50%), retenção (20%), velocidade (30%)
-
-**`agents/codegen_agent.py`** — Agente gerador de código (aprimorado):
-- `recomendar_modulos_gold()`: recomendação heurística sem LLM — analisa palavras-chave nos KPIs
-- `GOLD_MODULES` registry: catálogo de módulos disponíveis com metadata
-- `analisar_spec()`: agora inclui campo `modulos_gold_recomendados`
-- Fallback inteligente: se LLM indisponível, recomenda todos os módulos
-
-**`pipeline/orchestrator.py`** — Gold step integrado:
-- `_run_gold()`: executa todos os 5 módulos Gold em sequência
-- Paths configuráveis via `settings.gold_*_path`
-- Retorno consolidado com stats de cada módulo
-
-### Testes (224 passando)
-
-```
-tests/test_phase1.py — 34 testes (fundação + specs)
-tests/test_phase2.py — 16 testes (bronze + orchestrator + spec integration)
-tests/test_phase3.py — 33 testes (silver + spec tools)
-tests/test_phase4.py — 45 testes (gold + codegen agent)
-tests/test_phase5.py — 96 testes (agent tools + LangGraph agents)
-```
-
-## Fase 5 — Sistema de Agentes
-
-### O que foi implementado
-
-**`agents/tools/data_tools.py`** — Ferramentas de dados para agentes:
-- `listar_tabelas()`: lista todas as tabelas do pipeline com status (existe/linhas/versão)
-- `ler_tabela()`: lê até N linhas de uma tabela por nome lógico ou path
-- `obter_schema()`: retorna esquema {coluna: tipo} de qualquer tabela
-- `amostrar_tabela()`: amostragem aleatória com seed fixo
-- `contar_linhas()` / `tabela_existe()`: consultas rápidas
-- Resolução automática de nomes lógicos (`"bronze"` → path completo)
-
-**`agents/tools/pipeline_tools.py`** — Ferramentas de controle do pipeline:
-- `executar_pipeline()`: dispara execução completa ou de camadas específicas
-- `executar_camada()`: executa uma única camada do pipeline
-- `obter_status_ultimo_run()`: consulta última execução
-- `obter_historico_runs()`: histórico de execuções com detalhes
-- `obter_metricas_llm()`: custo total e tokens consumidos
-- `obter_alertas()`: alertas abertos ou todos
-
-**`agents/tools/quality_tools.py`** — Ferramentas de qualidade de dados:
-- `verificar_nulos()`: contagem e percentual de nulos por coluna
-- `verificar_duplicatas()`: detecção de duplicatas por colunas-chave
-- `comparar_schemas()`: comparação entre schemas de duas tabelas
-- `verificar_integridade()`: score de saúde (0-100) com classificação (saudável/atenção/crítico)
-- `validar_valores()`: validação de valores contra lista de valores esperados
-
-**`agents/pipeline_agent.py`** — LangGraph state machine para execução end-to-end:
-- Grafo: `load_spec` → `analyze_data` → `plan` → `execute_bronze` → `execute_silver` → `execute_gold` → `validate` → `complete`
-- Planejamento inteligente: determina quais camadas executar com base no estado das tabelas
-- Roteamento condicional: pula camadas ou aborta em erro
-- Registra todas as ações no MonitoringStore + EventBus
-- Cria alertas automáticos em caso de falha
-- API: `run_pipeline_agent(spec_path, spec, layers)`
-
-**`agents/monitor_agent.py`** — LangGraph loop de monitoramento contínuo:
-- Grafo cíclico: `check_new_data` → `check_health` → `decide` → `trigger_pipeline` → `check_continue` → (loop)
-- Detecta novos dados na Bronze sem Silver correspondente
-- Verifica saúde de todas as tabelas existentes (quality_tools)
-- Dispara pipeline_agent automaticamente quando necessário
-- Gera alertas para problemas de saúde de dados
-- API: `run_monitor_agent(max_ciclos)`
-
-**`agents/repair_agent.py`** — LangGraph agent para auto-correção de falhas:
-- Grafo: `get_error` → `analyze` → `propose_fix` → `apply_fix` → `retry` → `validate` → (loop ou fim)
-- **5 estratégias**: retry, skip_layer, retry_from_start, data_quality_fix, no_action
-- Análise heurística (sem LLM): file not found, schema mismatch, permission denied, tabela ausente
-- Análise LLM opcional: enriquece diagnóstico quando disponível
-- Múltiplas tentativas com loop automático
-- Escala para operador humano via alerta quando esgota tentativas
-- API: `run_repair_agent(erro, camada_falha, max_tentativas)`

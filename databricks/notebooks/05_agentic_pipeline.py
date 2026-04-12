@@ -19,36 +19,36 @@
 # ]
 # ///
 # MAGIC %md
-# MAGIC # 05 — Agentic Pipeline: Full LLM-Driven ETL
+# MAGIC # 05 — Pipeline Agêntico: ETL Completo Dirigido por LLM
 # MAGIC
-# MAGIC This notebook runs the **complete agentic pipeline** on Databricks Free Edition.
-# MAGIC It replicates the same flow that Streamlit runs locally via Docker:
+# MAGIC Este notebook executa o **pipeline agêntico completo** no Databricks Free Edition.
+# MAGIC Replica o mesmo fluxo que o Streamlit executa localmente via Docker:
 # MAGIC
-# MAGIC 1. Load input files (parquet data sample, data dictionary, KPI description)
-# MAGIC 2. Analyze the data and create a `ProjectSpec`
-# MAGIC 3. Use `CodeGenAgent` (LLM) to generate Bronze / Silver / Gold ETL code
-# MAGIC 4. Execute the generated code → write Delta tables to UC Volumes
-# MAGIC 5. Validate and display results
+# MAGIC 1. Carregar arquivos de entrada (amostra parquet, dicionário de dados, descrição dos KPIs)
+# MAGIC 2. Analisar os dados e criar um `ProjectSpec`
+# MAGIC 3. Usar o `CodeGenAgent` (LLM) para gerar código ETL Bronze / Silver / Gold
+# MAGIC 4. Executar o código gerado → gravar tabelas Delta nos UC Volumes
+# MAGIC 5. Validar e exibir resultados
 # MAGIC
-# MAGIC **Architecture (Databricks Free Edition — Serverless):**
-# MAGIC - Uses `RUNTIME_ENV=databricks` with `DATA_ROOT` pointing to UC Volume (auto-detected catalog)
-# MAGIC - All I/O goes through `DatabricksBackend` (PySpark) which writes Delta tables to UC Volumes
-# MAGIC - Delta tables written to Volumes are readable by PySpark at the same path
-# MAGIC - Monitoring uses Delta tables (not SQLite) via `force_delta_monitoring`
-# MAGIC - Serverless compute is provisioned automatically — no cluster management needed
+# MAGIC **Arquitetura (Databricks Free Edition — Serverless):**
+# MAGIC - Usa `RUNTIME_ENV=databricks` com `DATA_ROOT` apontando para UC Volume (catálogo auto-detectado)
+# MAGIC - Toda I/O passa pelo `DatabricksBackend` (PySpark) que grava tabelas Delta nos UC Volumes
+# MAGIC - Tabelas Delta gravadas em Volumes são legíveis pelo PySpark no mesmo caminho
+# MAGIC - Monitoramento usa tabelas Delta (não SQLite) via `force_delta_monitoring`
+# MAGIC - Compute serverless é provisionado automaticamente — sem gerenciamento de clusters
 # MAGIC
-# MAGIC **Prerequisites:**
-# MAGIC 1. Upload your data files to UC Volume (see Cell 3 below)
-# MAGIC 2. Set your LLM API key (see Cell 2 below)
-# MAGIC 3. Clone this repository to Databricks Repos
+# MAGIC **Pré-requisitos:**
+# MAGIC 1. Fazer upload dos arquivos de dados para o UC Volume (ver Célula 3 abaixo)
+# MAGIC 2. Configurar sua API key do LLM (ver Célula 2 abaixo)
+# MAGIC 3. Clonar este repositório no Databricks Repos
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 1. Install Dependencies
+# MAGIC ## 1. Instalar Dependências
 # MAGIC
-# MAGIC This cell installs all Python packages required by the agentic pipeline.
-# MAGIC **Note:** This triggers a Python interpreter restart on Databricks.
+# MAGIC Esta célula instala todos os pacotes Python necessários para o pipeline agêntico.
+# MAGIC **Nota:** Isso causa um reinício do interpretador Python no Databricks.
 
 # COMMAND ----------
 
@@ -57,11 +57,11 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 2. Environment Setup
+# MAGIC ## 2. Configuração do Ambiente
 # MAGIC
-# MAGIC Configure runtime environment, paths, and LLM API keys.
+# MAGIC Configurar ambiente de execução, caminhos e API keys do LLM.
 # MAGIC
-# MAGIC **IMPORTANT:** Set your LLM API key below before running.
+# MAGIC **IMPORTANTE:** Configure sua API key do LLM abaixo antes de executar.
 
 # COMMAND ----------
 
@@ -69,25 +69,25 @@ import os
 import sys
 from pathlib import Path
 
-# ── Load all config from Databricks Secrets ────────────────────────────────
-# The push_secrets.py script stores .env values (with RUNTIME_ENV="databricks")
-# in the "pipeline" scope. Load them all into env vars.
+# ── Carregar todas as configs do Databricks Secrets ────────────────────────
+# O script push_secrets.py armazena os valores do .env (com RUNTIME_ENV="databricks")
+# no scope "pipeline". Carrega todos nas variáveis de ambiente.
 SECRET_SCOPE = "pipeline"
 try:
     for s in dbutils.secrets.list(SECRET_SCOPE):
         os.environ[s.key] = dbutils.secrets.get(SECRET_SCOPE, s.key)
-    print(f"✅ Loaded {len(dbutils.secrets.list(SECRET_SCOPE))} secrets from scope '{SECRET_SCOPE}'")
+    print(f"✅ {len(dbutils.secrets.list(SECRET_SCOPE))} secrets carregados do scope '{SECRET_SCOPE}'")
 except Exception as e:
-    print(f"⚠️  Could not load secrets from scope '{SECRET_SCOPE}': {e}")
-    print("   Falling back to manual configuration below.")
+    print(f"⚠️  Não foi possível carregar secrets do scope '{SECRET_SCOPE}': {e}")
+    print("   Usando configuração manual abaixo.")
 
-# ── Runtime Configuration ──────────────────────────────────────────────────
-# Use DatabricksBackend (PySpark) for Delta writes — required because UC Volumes
-# don't support atomic rename operations that the deltalake library needs.
+# ── Configuração de Runtime ────────────────────────────────────────────────
+# Usar DatabricksBackend (PySpark) para gravações Delta — necessário porque UC Volumes
+# não suportam operações de rename atômico que a biblioteca deltalake precisa.
 os.environ["RUNTIME_ENV"] = "databricks"
 os.environ["FORCE_DELTA_MONITORING"] = "true"
 
-# Auto-detect Volume path: find the catalog from the current workspace
+# Auto-detectar caminho do Volume: encontrar o catálogo do workspace atual
 try:
     catalogs = [r.catalog for r in spark.sql("SHOW CATALOGS").collect()]
     user_catalogs = [c for c in catalogs if c not in ("system", "hive_metastore", "samples") and not c.startswith("__")]
@@ -98,17 +98,17 @@ except Exception:
 VOLUME_ROOT = f"/Volumes/{CATALOG}/default/pipeline_data"
 os.environ["DATA_ROOT"] = VOLUME_ROOT
 
-# ── LLM API Key (only needed if secrets were not loaded above) ─────────────
-# Option A: Already loaded from secrets — nothing to do
-# Option B: Set directly (⚠️ don't commit secrets to repos)
+# ── API Key do LLM (necessário apenas se os secrets não foram carregados acima) ──
+# Opção A: Já carregado dos secrets — nada a fazer
+# Opção B: Definir diretamente (⚠️ não commite secrets no repo)
 # os.environ["ANTHROPIC_API_KEY"] = "sk-..."
-# Option C: Use notebook widgets for interactive key entry
+# Opção C: Usar widgets do notebook para entrada interativa da key
 # dbutils.widgets.text("llm_api_key", "", "LLM API Key")
 # os.environ["ANTHROPIC_API_KEY"] = dbutils.widgets.get("llm_api_key")
 
-# ── Repository Path ────────────────────────────────────────────────────────
+# ── Caminho do Repositório ─────────────────────────────────────────────────
 repo_path = os.getenv("PROJECT_REPO_PATH", "/Workspace/Repos/agentic-pipeline")
-# Try common Databricks Repos paths
+# Tentar caminhos comuns do Databricks Repos
 for candidate in [
     repo_path,
     "/Workspace/Repos/Lucasaor/smart-etl-tech-test",
@@ -122,15 +122,15 @@ for candidate in [
 if repo_path not in sys.path:
     sys.path.insert(0, repo_path)
 
-# ── Clear cached singletons so they pick up the env vars set above ─────────
-# get_settings() and get_storage_backend() use @lru_cache — if they were cached
-# from a previous cell run (e.g. with RUNTIME_ENV=local), clear them now.
+# ── Limpar singletons em cache para que capturem as env vars acima ─────────
+# get_settings() e get_storage_backend() usam @lru_cache — se foram cacheados
+# de uma execução anterior (ex: com RUNTIME_ENV=local), limpar agora.
 from config.settings import get_settings
 from core.storage import get_storage_backend
 get_settings.cache_clear()
 get_storage_backend.cache_clear()
 
-# Verify the backend is DatabricksBackend (PySpark), not LocalDeltaBackend (deltalake lib)
+# Verificar que o backend é DatabricksBackend (PySpark), não LocalDeltaBackend (deltalake lib)
 _backend = get_storage_backend()
 _backend_name = type(_backend).__name__
 assert _backend_name == "DatabricksBackend", (
@@ -150,19 +150,19 @@ print(f"API Key set:  {'yes' if os.environ.get('ANTHROPIC_API_KEY') or os.enviro
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 3. Prepare UC Volume Directories & Upload Input Files
+# MAGIC ## 3. Preparar Diretórios do UC Volume e Upload dos Arquivos de Entrada
 # MAGIC
-# MAGIC Create the required directory structure on UC Volumes and upload your input data.
+# MAGIC Criar a estrutura de diretórios necessária nos UC Volumes e fazer upload dos dados de entrada.
 # MAGIC
-# MAGIC **You need 3 input files:**
-# MAGIC - `conversations_bronze.parquet` — raw CRM data sample
-# MAGIC - `dicionario_dados.md` — data dictionary (column descriptions)
-# MAGIC - `descricao_kpis.md` — KPI definitions (what analytics to generate)
+# MAGIC **Você precisa de 3 arquivos de entrada:**
+# MAGIC - `conversations_bronze.parquet` — amostra de dados brutos de CRM
+# MAGIC - `dicionario_dados.md` — dicionário de dados (descrição das colunas)
+# MAGIC - `descricao_kpis.md` — definição dos KPIs (quais análises gerar)
 
 # COMMAND ----------
 
-# Verify UC Volume directories exist (created by setup_volumes.py)
-# On UC Volumes, directories were created during setup — just verify.
+# Verificar que os diretórios do UC Volume existem (criados por setup_volumes.py)
+# Nos UC Volumes, diretórios foram criados durante o setup — apenas verificar.
 
 SUBDIRS = [
     "specs", "specs/generated",
@@ -170,7 +170,7 @@ SUBDIRS = [
     "gold", "monitoring",
 ]
 
-print(f"Verifying UC Volume structure at {VOLUME_ROOT}:")
+print(f"Verificando estrutura do UC Volume em {VOLUME_ROOT}:")
 all_ok = True
 for subdir in SUBDIRS:
     path = Path(VOLUME_ROOT) / subdir
@@ -182,52 +182,52 @@ for subdir in SUBDIRS:
             path.mkdir(parents=True, exist_ok=True)
             print(f"  ✓ {path} (created)")
         except Exception as e:
-            print(f"  ✗ {path} - Error: {e}")
+            print(f"  ✗ {path} - Erro: {e}")
             all_ok = False
 
 if all_ok:
-    print(f"\n✅ UC Volume structure ready at {VOLUME_ROOT}")
+    print(f"\n✅ Estrutura do UC Volume pronta em {VOLUME_ROOT}")
 else:
-    print(f"\n⚠️  Some directories could not be verified. Run setup_volumes.py first.")
+    print(f"\n⚠️  Alguns diretórios não puderam ser verificados. Execute setup_volumes.py primeiro.")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Upload Option A: From Databricks UI
+# MAGIC ### Opção de Upload A: Pela Interface do Databricks
 # MAGIC
-# MAGIC 1. Click **Catalog** (left sidebar) → your catalog → **default** → **pipeline_data** volume
-# MAGIC 2. Upload your 3 files to the `specs/` folder
-# MAGIC 3. Or run `python databricks/setup_volumes.py` locally to upload everything
+# MAGIC 1. Clique em **Catalog** (barra lateral esquerda) → seu catálogo → **default** → volume **pipeline_data**
+# MAGIC 2. Faça upload dos 3 arquivos na pasta `specs/`
+# MAGIC 3. Ou execute `python databricks/setup_volumes.py` localmente para fazer upload de tudo
 
 # COMMAND ----------
 
-# If files were already uploaded by setup_volumes.py, nothing to do here.
-# To upload manually from the UI:
-# 1. Click Catalog → <your-catalog> → default → pipeline_data volume
-# 2. Navigate to the specs/ folder
+# Se os arquivos já foram enviados pelo setup_volumes.py, nada a fazer aqui.
+# Para enviar manualmente pela UI:
+# 1. Clique em Catalog → <seu-catálogo> → default → volume pipeline_data
+# 2. Navegue até a pasta specs/
 # 3. Upload: conversations_bronze.parquet, dicionario_dados.md, descricao_kpis.md
 
-# List current files in specs/:
+# Listar arquivos atuais em specs/:
 try:
     specs = dbutils.fs.ls(f"{VOLUME_ROOT}/specs/")
-    print(f"Files in {VOLUME_ROOT}/specs/:")
+    print(f"Arquivos em {VOLUME_ROOT}/specs/:")
     for f in specs:
         print(f"  {f.name} ({f.size / 1024:.1f} KB)")
 except Exception as e:
-    print(f"Could not list specs: {e}")
+    print(f"Não foi possível listar specs: {e}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Upload Option B: From Repository Files
+# MAGIC ### Opção de Upload B: A Partir de Arquivos do Repositório
 # MAGIC
-# MAGIC If the input files are already in the cloned repository:
+# MAGIC Se os arquivos de entrada já estão no repositório clonado:
 
 # COMMAND ----------
 
 import shutil
 
-# Copy from repository to UC Volume working directory
+# Copiar do repositório para o diretório de trabalho do UC Volume
 SPEC_DIR = f"{VOLUME_ROOT}/specs"
 repo = Path(repo_path)
 
@@ -249,7 +249,7 @@ files_to_copy = {
 for target_name, candidates in files_to_copy.items():
     target = Path(SPEC_DIR) / target_name
     if target.exists():
-        print(f"  ✓ {target_name} (already exists)")
+        print(f"  ✓ {target_name} (já existe)")
         continue
     for src in candidates:
         if src.exists():
@@ -257,12 +257,12 @@ for target_name, candidates in files_to_copy.items():
             print(f"  ✓ {target_name} ← {src}")
             break
     else:
-        print(f"  ✗ {target_name} — not found in repo, upload manually")
+        print(f"  ✗ {target_name} — não encontrado no repo, faça upload manualmente")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Verify Input Files
+# MAGIC ### Verificar Arquivos de Entrada
 
 # COMMAND ----------
 
@@ -280,21 +280,21 @@ for fname in required_files:
         size_kb = fpath.stat().st_size / 1024
         print(f"  ✓ {fname} ({size_kb:.1f} KB)")
     else:
-        print(f"  ✗ {fname} — MISSING! Upload before continuing.")
+        print(f"  ✗ {fname} — AUSENTE! Faça upload antes de continuar.")
         all_ok = False
 
 if all_ok:
-    print("\n✅ All input files present. Ready to proceed.")
+    print("\n✅ Todos os arquivos de entrada presentes. Pronto para prosseguir.")
 else:
-    print("\n❌ Missing files. Use Option A or B above to upload them.")
+    print("\n❌ Arquivos ausentes. Use a Opção A ou B acima para enviá-los.")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 4. Create Project Specification
+# MAGIC ## 4. Criar Especificação do Projeto
 # MAGIC
-# MAGIC Analyze the data sample and create a `ProjectSpec` — the same structure
-# MAGIC the Streamlit frontend creates locally.
+# MAGIC Analisar a amostra de dados e criar um `ProjectSpec` — a mesma estrutura
+# MAGIC que o frontend Streamlit cria localmente.
 
 # COMMAND ----------
 
@@ -308,27 +308,27 @@ PARQUET_PATH = f"{spec_dir}/conversations_bronze.parquet"
 DICT_PATH = f"{spec_dir}/dicionario_dados.md"
 KPI_PATH = f"{spec_dir}/descricao_kpis.md"
 
-# Analyze the data sample
-print("Analyzing data sample...")
+# Analisar a amostra de dados
+print("Analisando amostra de dados...")
 analise = analisar_amostra(PARQUET_PATH)
 print(f"  Columns: {len(analise.colunas)}")
 print(f"  Rows: {analise.num_linhas}")
-print(f"  Columns detected:")
+print(f"  Colunas detectadas:")
 for col in analise.colunas:
     print(f"    - {col.nome}: {col.tipo} (nulls={col.nulos_pct:.1f}%, uniques={col.valores_unicos})")
 
 # COMMAND ----------
 
-# Read specification files
+# Ler arquivos de especificação
 dicionario = Path(DICT_PATH).read_text(encoding="utf-8")
 descricao_kpis = Path(KPI_PATH).read_text(encoding="utf-8")
 
-print(f"Data dictionary: {len(dicionario)} chars")
-print(f"KPI description: {len(descricao_kpis)} chars")
+print(f"Dicionário de dados: {len(dicionario)} chars")
+print(f"Descrição dos KPIs: {len(descricao_kpis)} chars")
 
 # COMMAND ----------
 
-# Create and save ProjectSpec
+# Criar e salvar ProjectSpec
 spec = ProjectSpec(
     nome="crm_pipeline_databricks",
     dados_brutos_path=PARQUET_PATH,
@@ -339,17 +339,17 @@ spec = ProjectSpec(
 )
 
 salvar_spec(spec, spec_dir)
-print(f"✅ ProjectSpec saved to {spec_dir}")
+print(f"✅ ProjectSpec salvo em {spec_dir}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 5. Generate Pipeline Code (LLM)
+# MAGIC ## 5. Gerar Código do Pipeline (LLM)
 # MAGIC
-# MAGIC The `CodeGenAgent` calls the LLM to dynamically generate Python/Polars
-# MAGIC ETL code for each pipeline layer. This is the core agentic feature.
+# MAGIC O `CodeGenAgent` chama o LLM para gerar dinamicamente código ETL em Python/Polars
+# MAGIC para cada camada do pipeline. Esta é a funcionalidade central do sistema agêntico.
 # MAGIC
-# MAGIC The generated code follows the signature:
+# MAGIC O código gerado segue a assinatura:
 # MAGIC ```python
 # MAGIC def run(read_table, write_table, settings: dict) -> dict
 # MAGIC ```
@@ -358,42 +358,42 @@ print(f"✅ ProjectSpec saved to {spec_dir}")
 
 from agents.codegen_agent import CodeGenAgent, salvar_pipeline_gerado
 
-print("Initializing CodeGenAgent...")
+print("Inicializando CodeGenAgent...")
 agent = CodeGenAgent()
 
-print("Generating full pipeline (Bronze → Silver → Gold)...")
-print("This calls the LLM multiple times — may take 1-3 minutes.\n")
+print("Gerando pipeline completo (Bronze → Silver → Gold)...")
+print("Isso chama o LLM múltiplas vezes — pode levar 1-3 minutos.\n")
 
 pipeline_gerado = agent.gerar_pipeline_completo(spec)
 
 # COMMAND ----------
 
-# Save generated code to UC Volume
+# Salvar código gerado no UC Volume
 generated_dir = str(Path(spec_dir) / "generated")
 file_paths = salvar_pipeline_gerado(pipeline_gerado, generated_dir)
 
-print(f"✅ Pipeline generated with {len(file_paths)} files:\n")
+print(f"✅ Pipeline gerado com {len(file_paths)} arquivos:\n")
 for key, path in file_paths.items():
     print(f"  {key}: {path}")
 
-# Show generation summary
+# Exibir resumo da geração
 if pipeline_gerado.analise:
     a = pipeline_gerado.analise
-    print(f"\nSpec Analysis:")
-    print(f"  Columns identified: {len(a.colunas_identificadas)}")
-    print(f"  KPIs identified: {len(a.kpis_identificados)}")
-    print(f"  Gold modules: {a.modulos_gold_recomendados}")
+    print(f"\nAnálise da Spec:")
+    print(f"  Colunas identificadas: {len(a.colunas_identificadas)}")
+    print(f"  KPIs identificados: {len(a.kpis_identificados)}")
+    print(f"  Módulos Gold: {a.modulos_gold_recomendados}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### (Optional) Inspect Generated Code
+# MAGIC ### (Opcional) Inspecionar Código Gerado
 # MAGIC
-# MAGIC View the LLM-generated code for each layer.
+# MAGIC Visualizar o código gerado pelo LLM para cada camada.
 
 # COMMAND ----------
 
-# Bronze code
+# Código Bronze
 if pipeline_gerado.bronze and pipeline_gerado.bronze.codigo:
     print(f"═══ Bronze ({pipeline_gerado.bronze.codigo.count(chr(10))+1} lines) ═══")
     print(pipeline_gerado.bronze.codigo[:2000])
@@ -402,7 +402,7 @@ if pipeline_gerado.bronze and pipeline_gerado.bronze.codigo:
 
 # COMMAND ----------
 
-# Silver code
+# Código Silver
 if pipeline_gerado.silver and pipeline_gerado.silver.codigo:
     print(f"═══ Silver ({pipeline_gerado.silver.codigo.count(chr(10))+1} lines) ═══")
     print(pipeline_gerado.silver.codigo[:2000])
@@ -411,7 +411,7 @@ if pipeline_gerado.silver and pipeline_gerado.silver.codigo:
 
 # COMMAND ----------
 
-# Gold modules
+# Módulos Gold
 for gold in pipeline_gerado.gold:
     if gold.codigo:
         print(f"═══ Gold: {gold.camada} ({gold.codigo.count(chr(10))+1} lines) ═══")
@@ -423,17 +423,17 @@ for gold in pipeline_gerado.gold:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 6. Execute Pipeline
+# MAGIC ## 6. Executar Pipeline
 # MAGIC
-# MAGIC Run the generated code through the `PipelineOrchestrator`.
-# MAGIC This executes Bronze → Silver → Gold sequentially, writing Delta tables
-# MAGIC to UC Volumes. Failures trigger the `RepairAgent` for automatic recovery.
+# MAGIC Executar o código gerado através do `PipelineOrchestrator`.
+# MAGIC Executa Bronze → Silver → Gold sequencialmente, gravando tabelas Delta
+# MAGIC nos UC Volumes. Falhas acionam o `RepairAgent` para recuperação automática.
 
 # COMMAND ----------
 
 from pipeline.orchestrator import PipelineOrchestrator
 
-print("Executing pipeline...\n")
+print("Executando pipeline...\n")
 orch = PipelineOrchestrator(spec=spec)
 run = orch.run_pipeline(
     layers=["bronze", "silver", "gold"],
@@ -456,9 +456,9 @@ for step in run.steps:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 7. Validate Results
+# MAGIC ## 7. Validar Resultados
 # MAGIC
-# MAGIC Verify that Delta tables were created and contain data.
+# MAGIC Verificar que as tabelas Delta foram criadas e contêm dados.
 
 # COMMAND ----------
 
@@ -466,22 +466,22 @@ from core.storage import get_storage_backend
 
 backend = get_storage_backend()
 
-# Check all expected tables
+# Verificar todas as tabelas esperadas
 tables_to_check = {
     "Bronze": settings.bronze_path,
     "Silver Messages": settings.silver_messages_path,
     "Silver Conversations": settings.silver_conversations_path,
 }
 
-# Add Gold tables dynamically
+# Adicionar tabelas Gold dinamicamente
 gold_base = Path(settings.gold_path)
 if gold_base.exists():
     for sub in sorted(gold_base.iterdir()):
         if sub.is_dir() and not sub.name.startswith("."):
             tables_to_check[f"Gold: {sub.name}"] = str(sub)
 
-print("Delta Table Validation:")
-print(f"{'Table':<30} {'Exists':<8} {'Rows':<10} {'Version'}")
+print("Validação das Tabelas Delta:")
+print(f"{'Tabela':<30} {'Existe':<8} {'Linhas':<10} {'Versão'}")
 print("-" * 60)
 
 for label, path in tables_to_check.items():
@@ -499,10 +499,10 @@ for label, path in tables_to_check.items():
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 8. Preview Data with PySpark
+# MAGIC ## 8. Prévia dos Dados com PySpark
 # MAGIC
-# MAGIC The Delta tables written by the `deltalake` library to UC Volumes
-# MAGIC are readable by PySpark at the same path.
+# MAGIC As tabelas Delta gravadas pela biblioteca `deltalake` nos UC Volumes
+# MAGIC são legíveis pelo PySpark no mesmo caminho.
 
 # COMMAND ----------
 
@@ -516,7 +516,7 @@ try:
     print(f"=== Bronze: {df_bronze.count()} rows ===")
     df_bronze.show(5, truncate=40)
 except Exception as e:
-    print(f"Bronze not available: {e}")
+    print(f"Bronze não disponível: {e}")
 
 # COMMAND ----------
 
@@ -526,11 +526,11 @@ try:
     print(f"=== Silver Conversations: {df_silver.count()} rows ===")
     df_silver.show(5, truncate=40)
 except Exception as e:
-    print(f"Silver conversations not available: {e}")
+    print(f"Silver conversations não disponível: {e}")
 
 # COMMAND ----------
 
-# Gold tables
+# Tabelas Gold
 import os as _os
 
 gold_dir = f"{VOLUME_ROOT}/gold"
@@ -548,30 +548,30 @@ try:
         except Exception as e:
             print(f"Gold {table_name}: {e}\n")
 except Exception as e:
-    print(f"Gold directory not accessible: {e}")
+    print(f"Diretório Gold não acessível: {e}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 9. Summary & Next Steps
+# MAGIC ## 9. Resumo e Próximos Passos
 # MAGIC
-# MAGIC ### What happened:
-# MAGIC 1. **Spec Analysis**: The data sample was analyzed (column types, nulls, uniques)
-# MAGIC 2. **Code Generation**: The LLM generated ETL code for Bronze/Silver/Gold layers
-# MAGIC 3. **Execution**: Generated code was executed, writing Delta tables to UC Volumes
-# MAGIC 4. **Auto-Repair**: Any failures were automatically diagnosed and repaired by the RepairAgent
+# MAGIC ### O que aconteceu:
+# MAGIC 1. **Análise da Spec**: A amostra de dados foi analisada (tipos de coluna, nulos, valores únicos)
+# MAGIC 2. **Geração de Código**: O LLM gerou código ETL para as camadas Bronze/Silver/Gold
+# MAGIC 3. **Execução**: O código gerado foi executado, gravando tabelas Delta nos UC Volumes
+# MAGIC 4. **Auto-Reparo**: Falhas foram automaticamente diagnosticadas e reparadas pelo RepairAgent
 # MAGIC
-# MAGIC ### Accessing results:
+# MAGIC ### Acessando os resultados:
 # MAGIC - **PySpark**: `spark.read.format("delta").load(f"{VOLUME_ROOT}/bronze")`
 # MAGIC - **deltalake**: `DeltaTable(f"{VOLUME_ROOT}/bronze")`
 # MAGIC - **dbutils.fs**: `dbutils.fs.ls(f"{VOLUME_ROOT}/")`
 # MAGIC
-# MAGIC ### Re-running:
-# MAGIC - To regenerate code: delete `{VOLUME_ROOT}/specs/generated/pipeline_meta.json` and re-run from Cell 5
-# MAGIC - To re-execute with existing code: re-run from Cell 6
-# MAGIC - To use different data: replace files in `{VOLUME_ROOT}/specs/` and re-run from Cell 4
+# MAGIC ### Re-executando:
+# MAGIC - Para regenerar o código: delete `{VOLUME_ROOT}/specs/generated/pipeline_meta.json` e re-execute a partir da Célula 5
+# MAGIC - Para re-executar com código existente: re-execute a partir da Célula 6
+# MAGIC - Para usar dados diferentes: substitua os arquivos em `{VOLUME_ROOT}/specs/` e re-execute a partir da Célula 4
 # MAGIC
-# MAGIC ### Cleanup:
+# MAGIC ### Limpeza:
 # MAGIC ```python
 # MAGIC dbutils.fs.rm(f"{VOLUME_ROOT}/", recurse=True)
 # MAGIC ```

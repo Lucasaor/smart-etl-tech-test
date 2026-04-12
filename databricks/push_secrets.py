@@ -1,17 +1,17 @@
-"""Push .env values to Databricks Secrets.
+"""Enviar valores do .env para Databricks Secrets.
 
-Reads the local .env file, overrides RUNTIME_ENV to "databricks",
-and stores every key/value pair as a Databricks secret.
+Lê o arquivo .env local, sobrescreve RUNTIME_ENV para "databricks"
+e armazena cada par chave/valor como um secret no Databricks.
 
-Usage:
+Uso:
     python databricks/push_secrets.py
     python databricks/push_secrets.py --env-file .env --scope pipeline
-    python databricks/push_secrets.py --dry-run          # preview without pushing
-    python databricks/push_secrets.py --profile DEFAULT   # use CLI profile
+    python databricks/push_secrets.py --dry-run          # prévia sem enviar
+    python databricks/push_secrets.py --profile DEFAULT   # usar perfil CLI
 
-Pre-requisites:
-    - databricks-sdk installed: pip install databricks-sdk
-    - DATABRICKS_HOST / DATABRICKS_TOKEN env vars (or --profile)
+Pré-requisitos:
+    - databricks-sdk instalado: pip install databricks-sdk
+    - Variáveis de ambiente DATABRICKS_HOST / DATABRICKS_TOKEN (ou --profile)
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ DEFAULT_SCOPE = "pipeline"
 # ── helpers ──────────────────────────────────────────────────────────────
 
 def get_workspace_client(profile: str | None = None):
-    """Create a Databricks WorkspaceClient."""
+    """Cria um WorkspaceClient do Databricks."""
     try:
         from databricks.sdk import WorkspaceClient
     except ImportError:
@@ -42,9 +42,9 @@ def get_workspace_client(profile: str | None = None):
 
 
 def parse_env_file(env_path: str) -> dict[str, str]:
-    """Parse a .env file into a dict, ignoring comments and blanks.
+    """Faz o parse de um arquivo .env para um dict, ignorando comentários e linhas em branco.
 
-    Handles optional quoting (single/double) around values.
+    Trata aspas opcionais (simples/duplas) ao redor dos valores.
     """
     entries: dict[str, str] = {}
     path = Path(env_path).resolve()
@@ -66,7 +66,7 @@ def parse_env_file(env_path: str) -> dict[str, str]:
             key = match.group(1)
             value = match.group(2).strip()
 
-            # Strip surrounding quotes if present
+            # Remover aspas ao redor se presentes
             if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
                 value = value[1:-1]
 
@@ -76,7 +76,7 @@ def parse_env_file(env_path: str) -> dict[str, str]:
 
 
 def ensure_scope(client, scope_name: str) -> None:
-    """Create the secret scope if it doesn't already exist."""
+    """Cria o secret scope se ainda não existir."""
     try:
         scopes = client.secrets.list_scopes()
         if any(s.name == scope_name for s in scopes):
@@ -101,7 +101,7 @@ def ensure_scope(client, scope_name: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Push .env values to Databricks Secrets (RUNTIME_ENV → 'databricks')"
+        description="Envia valores do .env para Databricks Secrets (RUNTIME_ENV → 'databricks')"
     )
     parser.add_argument(
         "--env-file",

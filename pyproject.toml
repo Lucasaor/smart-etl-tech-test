@@ -14,18 +14,18 @@ requires-python = ">=3.11"
 license = "MIT"
 
 dependencies = [
-    # Storage & Compute
+    # Storage e Compute
     "deltalake>=0.18.0",
     "polars>=1.0.0",
     "duckdb>=1.0.0",
     "pyarrow>=17.0.0",
 
-    # LLM & Agents
+    # LLM e Agentes
     "litellm>=1.40.0",
     "langgraph>=0.2.0",
     "langchain-core>=0.3.0",
 
-    # Config
+    # Configuração
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "python-dotenv>=1.0.0",
@@ -34,7 +34,7 @@ dependencies = [
     "streamlit>=1.35.0",
     "plotly>=5.22.0",
 
-    # Utilities
+    # Utilitários
     "structlog>=24.0.0",
     "tenacity>=8.0.0",
 

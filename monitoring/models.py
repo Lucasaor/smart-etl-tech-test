@@ -1,4 +1,4 @@
-"""Monitoring data models for pipeline runs, steps, and agent actions."""
+"""Modelos de dados de monitoramento para execuções do pipeline, steps e ações dos agentes."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ class AlertSeverity(str, Enum):
 
 @dataclass
 class StepRun:
-    """Record of a single pipeline step execution."""
+    """Registro de execução de um step individual do pipeline."""
 
     step_name: str
     status: RunStatus = RunStatus.PENDING
@@ -44,7 +44,7 @@ class StepRun:
 
 @dataclass
 class PipelineRun:
-    """Record of a full pipeline execution (Bronze → Silver → Gold)."""
+    """Registro de execução completa do pipeline (Bronze → Silver → Gold)."""
 
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     status: RunStatus = RunStatus.PENDING
@@ -63,7 +63,7 @@ class PipelineRun:
 
 @dataclass
 class AgentAction:
-    """Record of a single action taken by an agent."""
+    """Registro de uma ação individual executada por um agente."""
 
     agent_name: str
     action: str
@@ -81,7 +81,7 @@ class AgentAction:
 
 @dataclass
 class Alert:
-    """An alert raised by the monitoring system."""
+    """Alerta emitido pelo sistema de monitoramento."""
 
     alert_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     severity: AlertSeverity = AlertSeverity.INFO
@@ -89,4 +89,4 @@ class Alert:
     message: str = ""
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     resolved: bool = False
-    source: str = ""  # e.g. "monitor_agent", "pipeline_step"
+    source: str = ""  # ex: "monitor_agent", "pipeline_step"

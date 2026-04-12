@@ -1,1 +1,1 @@
-"""Tests package."""
+"""Pacote de testes."""
