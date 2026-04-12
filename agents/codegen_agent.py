@@ -121,6 +121,19 @@ _SYSTEM_PROMPT_BASE = textwrap.dedent("""\
     13. NUNCA importe deltalake (from deltalake, import deltalake, write_deltalake,
         DeltaTable). A persistência Delta é feita EXCLUSIVAMENTE via write_table()
         e read_table() passadas como parâmetro. Importar deltalake causa erro.
+    14. ATENÇÃO à API do Polars — erros comuns a EVITAR:
+        - NÃO existe df.sort_by(). Use df.sort("coluna") ou df.sort(["col1", "col2"]).
+        - NÃO existe df.groupby(). Use df.group_by("coluna").
+        - NÃO existe df.rename({{...}}). Use df.rename({{"old": "new"}}).
+        - NÃO existe df.drop_duplicates(). Use df.unique().
+        - NÃO existe df.fillna(). Use df.fill_null().
+        - NÃO existe df.isna(). Use df.is_null().
+        - NÃO existe df.astype(). Use df.cast().
+        - NÃO existe pl.col("x").str.contains(pat, regex=True). Use pl.col("x").str.contains(pat).
+        - NÃO use .apply() — use .map_elements() ou expressões nativas Polars.
+    15. NUNCA engula exceções dentro de try/except retornando rows_written=0.
+        Se uma operação falhar, faça raise para que o erro possa ser diagnosticado.
+        O try/except deve ser APENAS para operações opcionais (ex: parsing de um campo).
 """)
 
 _BRONZE_PROMPT = textwrap.dedent("""\
@@ -527,9 +540,13 @@ class CodeGenAgent:
 
             rows = result.get("rows_written", 0)
             if rows == 0:
+                # Include the actual status/error from the generated code so
+                # the LLM can see what went wrong during regeneration.
+                status = result.get("status", "")
+                detail = f" Detalhes: {status}" if status and status != "ok" else ""
                 return False, (
                     f"Execução produziu 0 linhas na camada {label} — "
-                    "nenhum dado processado. Verifique a lógica de transformação."
+                    f"nenhum dado processado.{detail}"
                 )
 
             logger.info("execucao_validacao_ok", camada=label, rows=rows)
