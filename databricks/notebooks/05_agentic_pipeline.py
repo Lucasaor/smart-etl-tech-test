@@ -122,11 +122,28 @@ for candidate in [
 if repo_path not in sys.path:
     sys.path.insert(0, repo_path)
 
+# ── Clear cached singletons so they pick up the env vars set above ─────────
+# get_settings() and get_storage_backend() use @lru_cache — if they were cached
+# from a previous cell run (e.g. with RUNTIME_ENV=local), clear them now.
+from config.settings import get_settings
+from core.storage import get_storage_backend
+get_settings.cache_clear()
+get_storage_backend.cache_clear()
+
+# Verify the backend is DatabricksBackend (PySpark), not LocalDeltaBackend (deltalake lib)
+_backend = get_storage_backend()
+_backend_name = type(_backend).__name__
+assert _backend_name == "DatabricksBackend", (
+    f"Expected DatabricksBackend but got {_backend_name}. "
+    f"Check RUNTIME_ENV={os.environ.get('RUNTIME_ENV')}"
+)
+
 print(f"Repo path:    {repo_path}")
 print(f"Catalog:      {CATALOG}")
 print(f"VOLUME_ROOT:  {VOLUME_ROOT}")
 print(f"DATA_ROOT:    {os.environ['DATA_ROOT']}")
 print(f"RUNTIME_ENV:  {os.environ['RUNTIME_ENV']}")
+print(f"Backend:      {_backend_name}")
 print(f"LLM_MODEL:    {os.environ.get('LLM_MODEL', '(not set)')}")
 print(f"API Key set:  {'yes' if os.environ.get('ANTHROPIC_API_KEY') or os.environ.get('OPENAI_API_KEY') else 'NO — set it above'}")
 

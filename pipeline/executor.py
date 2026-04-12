@@ -172,6 +172,20 @@ def execute_generated_code(
     if not code.strip():
         raise CodeExecutionError("Código vazio — nada para executar", code=code)
 
+    # Guard: reject generated code that imports deltalake directly.
+    # On Databricks UC Volumes, the deltalake Python library fails because
+    # Volumes don't support atomic rename. All Delta I/O must go through
+    # the write_table/read_table wrappers (which use the correct backend).
+    import re as _re
+    if _re.search(r"\b(from\s+deltalake|import\s+deltalake)\b", code):
+        raise CodeExecutionError(
+            f"Código gerado ({label}) importa 'deltalake' diretamente. "
+            "Use write_table()/read_table() passadas como parâmetro em vez de "
+            "importar deltalake. Isso é necessário para compatibilidade com "
+            "Databricks UC Volumes.",
+            code=code,
+        )
+
     # Namespace isolado com imports permitidos
     namespace: dict[str, Any] = {
         "__builtins__": __builtins__,
