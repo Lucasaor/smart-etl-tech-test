@@ -1,4 +1,23 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "2"
+# dependencies = [
+#   "polars",
+#   "deltalake",
+#   "duckdb",
+#   "pyarrow",
+#   "litellm",
+#   "langgraph",
+#   "langchain-core",
+#   "langchain-text-splitters",
+#   "tenacity",
+#   "structlog",
+#   "pydantic",
+#   "pydantic-settings",
+#   "python-dotenv",
+# ]
+# ///
 # MAGIC %md
 # MAGIC # 05 — Agentic Pipeline: Full LLM-Driven ETL
 # MAGIC
@@ -105,8 +124,12 @@ print(f"RUNTIME_ENV: {os.environ['RUNTIME_ENV']}")
 
 # COMMAND ----------
 
-# Create UC Volume directory structure
-VOLUME_ROOT = "/Volumes/main/default/pipeline_data"
+# Create DBFS directory structure using dbutils.fs (required for serverless)
+# Note: Serverless compute has public DBFS root disabled. 
+# Use Volumes path or FileStore instead.
+
+# Update DBFS_ROOT to use a path compatible with serverless
+DBFS_ROOT = "dbfs:/FileStore/delta"  # Use FileStore instead of root DBFS
 SUBDIRS = [
     "specs", "specs/generated", "specs/generated/tests",
     "bronze", "silver", "silver/messages", "silver/conversations",
@@ -114,10 +137,16 @@ SUBDIRS = [
 ]
 
 for subdir in SUBDIRS:
-    Path(f"{VOLUME_ROOT}/{subdir}").mkdir(parents=True, exist_ok=True)
-    print(f"  ✓ {VOLUME_ROOT}/{subdir}")
+    path = f"{DBFS_ROOT}/{subdir}"
+    try:
+        dbutils.fs.mkdirs(path)
+        print(f"  ✓ {path}")
+    except Exception as e:
+        print(f"  ✗ {path} - Error: {e}")
 
-print(f"\nUC Volume directories ready at {VOLUME_ROOT}/")
+print(f"\nDBFS directories ready at {DBFS_ROOT}/")
+print(f"\n⚠️  Note: Updated DATA_ROOT to use FileStore (compatible with serverless)")
+print("Update Cell 5 to set: os.environ['DATA_ROOT'] = '/dbfs/FileStore/delta'")
 
 # COMMAND ----------
 
