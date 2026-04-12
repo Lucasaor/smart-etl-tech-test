@@ -21,6 +21,21 @@ from core.storage import get_storage_backend
 logger = structlog.get_logger(__name__)
 
 
+def _normalize_timestamps(df: pl.DataFrame) -> pl.DataFrame:
+    """Cast all Datetime columns to μs precision.
+
+    Delta Lake / PySpark use microsecond timestamps.  Polars and Pandas may
+    introduce nanosecond precision during reads, causing schema-mismatch
+    errors on subsequent writes or concat operations.
+    """
+    casts = [
+        pl.col(name).cast(pl.Datetime("us", dtype.time_zone))  # type: ignore[union-attr]
+        for name, dtype in df.schema.items()
+        if isinstance(dtype, pl.Datetime) and dtype.time_unit != "us"
+    ]
+    return df.with_columns(casts) if casts else df
+
+
 class CodeExecutionError(Exception):
     """Erro na execução de código gerado."""
 
@@ -47,7 +62,7 @@ def _make_read_source() -> Callable:
             logger.info("reading_source_csv", path=path)
             return pl.read_csv(path)
         logger.info("reading_source_parquet", path=path)
-        return pl.read_parquet(path)
+        return _normalize_timestamps(pl.read_parquet(path))
 
     return read_source
 
@@ -62,7 +77,7 @@ def _make_read_table() -> Callable:
 
     def read_table(path: str, version: int | None = None) -> pl.DataFrame:
         try:
-            return backend.read_table(path, version=version)
+            return _normalize_timestamps(backend.read_table(path, version=version))
         except Exception as delta_err:
             # Fallback: tentar ler como Parquet simples
             from pathlib import Path as _P
@@ -73,7 +88,7 @@ def _make_read_table() -> Callable:
                     path=path,
                     delta_error=str(delta_err),
                 )
-                return pl.read_parquet(path)
+                return _normalize_timestamps(pl.read_parquet(path))
             # Tentar como diretório com parquet files dentro
             if p.is_dir():
                 parquets = list(p.glob("*.parquet"))
@@ -83,7 +98,7 @@ def _make_read_table() -> Callable:
                         path=path,
                         n_files=len(parquets),
                     )
-                    return pl.read_parquet(str(p / "*.parquet"))
+                    return _normalize_timestamps(pl.read_parquet(str(p / "*.parquet")))
             raise
 
     return read_table
@@ -98,7 +113,7 @@ def _make_write_table() -> Callable:
         path: str,
         mode: Literal["overwrite", "append"] = "overwrite",
     ) -> None:
-        backend.write_table(df, path, mode=mode)
+        backend.write_table(_normalize_timestamps(df), path, mode=mode)
 
     return write_table
 

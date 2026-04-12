@@ -134,8 +134,17 @@ class DatabricksBackend(StorageBackend):
         if version is not None:
             reader = reader.option("versionAsOf", version)
         spark_df = reader.load(path)
-        # Convert via Arrow for efficiency
-        return pl.from_arrow(spark_df.toPandas())  # Spark → Pandas → Polars
+        # Convert Spark → Pandas → Polars.  Pandas uses ns timestamps;
+        # cast back to μs (Delta/Spark standard) to avoid precision mismatches.
+        pdf = spark_df.toPandas()
+        result = pl.from_pandas(pdf)
+        # Normalise Datetime columns to μs so downstream code never sees ns.
+        casts = [
+            pl.col(name).cast(pl.Datetime("us", dtype.time_zone))
+            for name, dtype in result.schema.items()
+            if isinstance(dtype, pl.Datetime) and dtype.time_unit != "us"
+        ]
+        return result.with_columns(casts) if casts else result
 
     def write_table(
         self,
@@ -145,6 +154,15 @@ class DatabricksBackend(StorageBackend):
         schema_mode: str | None = None,
     ) -> None:
         spark = self._get_spark()
+        # Normalise timestamps to μs before Pandas conversion to avoid
+        # ns overflow and ensure consistency with Delta/Spark.
+        casts = [
+            pl.col(name).cast(pl.Datetime("us", dtype.time_zone))
+            for name, dtype in df.schema.items()
+            if isinstance(dtype, pl.Datetime) and dtype.time_unit != "us"
+        ]
+        if casts:
+            df = df.with_columns(casts)
         spark_df = spark.createDataFrame(df.to_pandas())
         writer = spark_df.write.format("delta").mode(mode)
         if schema_mode == "merge":
