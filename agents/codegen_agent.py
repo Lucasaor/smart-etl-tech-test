@@ -131,6 +131,12 @@ _SYSTEM_PROMPT_BASE = textwrap.dedent("""\
         - NÃO existe df.astype(). Use df.cast().
         - NÃO existe pl.col("x").str.contains(pat, regex=True). Use pl.col("x").str.contains(pat).
         - NÃO use .apply() — use .map_elements() ou expressões nativas Polars.
+        - map_elements() é método de Expr, NÃO de DataFrame. Use pl.col("x").map_elements(fn).
+        - NÃO acesse .dtype em expressões (pl.col("x").dtype não existe).
+          Para verificar tipo, use df.schema["coluna"] ou df["coluna"].dtype.
+        - Se uma coluna já é Datetime, NÃO use .str.strptime() — isso falha com
+          SchemaError. Verifique o tipo antes: if df.schema["col"] == pl.String:...
+          Ou use .cast(pl.Datetime) que funciona tanto em String quanto em Datetime.
     15. NUNCA engula exceções dentro de try/except retornando rows_written=0.
         Se uma operação falhar, faça raise para que o erro possa ser diagnosticado.
         O try/except deve ser APENAS para operações opcionais (ex: parsing de um campo).
@@ -777,7 +783,8 @@ class CodeGenAgent:
         """Gera o código da camada Silver."""
         logger.info("gerando_codigo_silver")
 
-        schema_bronze = self._formatar_schema(spec)
+        # Prefer the real Bronze table schema (post-processing types)
+        schema_bronze = self._obter_schema_bronze_real() or self._formatar_schema(spec)
 
         prompt = _SILVER_PROMPT.format(
             schema_bronze=schema_bronze,
@@ -868,9 +875,22 @@ class CodeGenAgent:
         """
         logger.info("regenerando_camada", camada=camada, erro=erro_anterior[:200])
 
-        # Obter schema real da silver para contexto extra em camadas Gold
+        # Obter real schema for context depending on the layer
         extra_contexto = ""
-        if camada.startswith("gold"):
+        if camada == "silver":
+            schema_real = self._obter_schema_bronze_real()
+            if schema_real:
+                extra_contexto = (
+                    f"\n\nCONTEXTO IMPORTANTE — Schema REAL da tabela Bronze (tipos pós-processamento):\n"
+                    f"{schema_real}\n\n"
+                    "REGRAS OBRIGATÓRIAS PARA CORREÇÃO:\n"
+                    "1. Colunas Datetime JÁ SÃO datetime — NÃO use str.strptime() nelas.\n"
+                    "2. NÃO existe df.sort_by(). Use df.sort().\n"
+                    "3. NÃO existe df.map_elements(). Use pl.col('x').map_elements(fn).\n"
+                    "4. NÃO acesse .dtype em expressões Polars — use df.schema['coluna'] ou df['coluna'].dtype.\n"
+                    "5. Para verificar se uma coluna é String antes de parsear: if df.schema['col'] == pl.String\n"
+                )
+        elif camada.startswith("gold"):
             schema_real = self._obter_schema_silver_real()
             if schema_real:
                 extra_contexto = (
@@ -1003,7 +1023,7 @@ class CodeGenAgent:
                 codigo = self._gerar_codigo("bronze_fresh", prompt)
 
             elif camada == "silver":
-                schema_bronze = self._formatar_schema(spec)
+                schema_bronze = self._obter_schema_bronze_real() or self._formatar_schema(spec)
                 prompt = _SILVER_PROMPT.format(
                     schema_bronze=schema_bronze,
                     dicionario=spec.dicionario_dados,
@@ -1145,6 +1165,38 @@ class CodeGenAgent:
                 f"exemplo={c.exemplo!r}"
             )
         return "\n".join(linhas)
+
+    def _obter_schema_bronze_real(self) -> str | None:
+        """Tenta ler o schema real da tabela Bronze após processamento.
+
+        Retorna string formatada com colunas e tipos Polars reais, ou None
+        se a tabela Bronze ainda não foi escrita.
+        """
+        try:
+            from config.settings import get_settings
+            from core.storage import get_storage_backend
+
+            settings = get_settings()
+            backend = get_storage_backend()
+            if not backend.table_exists(settings.bronze_path):
+                return None
+
+            import polars as pl
+            df = backend.read_table(settings.bronze_path)
+            linhas = []
+            for col in df.columns:
+                dtype = df[col].dtype
+                linhas.append(f"  - {col}: tipo={dtype}")
+            logger.info("schema_bronze_real_lido", colunas=len(df.columns))
+            return (
+                "\n".join(linhas)
+                + "\n\nIMPORTANTE: Estes são os tipos REAIS após o processamento Bronze. "
+                "Colunas do tipo Datetime JÁ SÃO datetime — NÃO use str.strptime() nelas. "
+                "Use .cast(pl.Datetime) se precisar converter, mas NÃO str.strptime()."
+            )
+        except Exception as e:
+            logger.warning("schema_bronze_real_indisponivel", erro=str(e))
+            return None
 
     def _obter_schema_silver_real(self) -> str | None:
         """Tenta ler o schema real da tabela Silver conversations.
